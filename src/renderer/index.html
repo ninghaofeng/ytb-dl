@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'">
+  <title>ytb-dl-ui</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="brand" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg></div>
+    <div><div class="eyebrow">本地视频下载助手</div><h1>ytb-dl-ui</h1><p>视频留在本地，下载简单一点。</p></div>
+    <div class="platforms" role="list" aria-label="支持的平台"><span role="listitem">YouTube</span><span role="listitem">抖音</span><span role="listitem">TikTok</span></div>
+  </header>
+  <main>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <div id="warning" class="warning" hidden></div>
+    <section class="card composer">
+      <div class="heading"><h2>开始下载</h2><span class="muted">支持分享文字 · 每行一个链接</span></div>
+      <label for="urls" class="sr-only">视频或播放列表链接</label>
+      <textarea id="urls" rows="3" placeholder="粘贴 YouTube、抖音或 TikTok 链接&#10;也可以粘贴分享文字，程序会提取链接"></textarea>
+      <div class="options">
+        <label>下载类型<select id="kind"><option value="video">视频</option><option value="mp3">音频 MP3</option></select></label>
+        <label>画质上限<select id="height"><option value="0">最佳画质</option><option value="2160">4K / 2160p</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option><option value="360">360p</option></select></label>
+        <label>视频格式<select id="container"><option value="original">原始格式（推荐）</option><option value="mp4">兼容 MP4 / H.264</option></select></label>
+        <label>Cookie 来源<select id="cookie"><option value="none">不使用 Cookie</option><option value="file">导出的文件</option><option value="chrome">Chrome 自动读取</option></select></label>
+      </div>
+      <div class="actions"><button id="download" class="primary">加入下载队列</button><button id="parse">解析播放列表</button><span class="muted">MP4 不可用时会提示，不默认转码视频</span></div>
+    </section>
+    <section id="playlist" class="card" hidden>
+      <div class="heading"><h2>播放列表 <small id="playlist-count"></small></h2><button id="stop-parse">停止解析</button></div>
+      <p id="playlist-error" class="warning" hidden></p>
+      <label class="check"><input id="all-entries" type="checkbox"> 下载全部已解析条目（跨页）</label>
+      <div id="entries"></div>
+      <div class="actions"><button id="prev-page">上一页</button><span id="page-label"></span><button id="next-page">下一页</button><button id="download-selected" class="primary">下载选中条目</button></div>
+    </section>
+    <section class="card">
+      <div class="heading"><h2>下载任务 <small id="task-count">0</small></h2><button id="clear-tasks">清理已结束记录</button></div>
+      <p class="muted">中断任务重启后自动恢复。续传取决于远端支持；过期链接或转码中断可能需要重新下载。</p>
+      <div id="tasks"></div>
+      <div class="actions"><button id="task-prev">上一页</button><span id="task-page"></span><button id="task-next">下一页</button></div>
+    </section>
+    <section class="card">
+      <details id="settings"><summary>设置与 Cookie <span class="muted">目录 · 代理 · Chrome · 更新</span></summary>
+        <div class="settings-grid">
+          <div><h3>下载设置</h3><label>保存目录<div class="input-row"><input id="directory" readonly><button id="choose-directory">选择</button></div></label>
+            <label>同时下载数（1–5）<input id="concurrency" type="number" min="1" max="5" value="3"></label>
+            <label>代理地址<input id="proxy" type="password" autocomplete="off" placeholder="留空不更改；支持 HTTP / SOCKS"></label>
+            <label class="check"><input id="clear-proxy" type="checkbox"> 删除已保存代理</label>
+            <p id="proxy-state" class="muted"></p>
+            <label class="check"><input id="auto-update" type="checkbox" checked> 启动时检查 yt-dlp 更新（不自动安装）</label>
+            <button id="save-settings" class="primary">保存设置</button>
+          </div>
+          <div><h3>Cookie 文件自动同步</h3>
+            <p class="muted">仅保存在本机。监测文件不等于 Chrome 自动导出；运行中任务使用隔离副本。</p>
+            <label class="check"><input id="watch-file" type="checkbox" checked> 授权监测导出文件变化</label>
+            <div class="actions"><button id="import-cookies">导入 cookies.txt</button><button id="sync-file">重新加载</button><button id="clear-cookies">删除 / 停止监测</button></div>
+            <p id="file-state" class="muted"></p>
+            <h3>Chrome 自动读取</h3>
+            <p class="muted">授权后，下载与解析前同步。系统加密/权限可能阻止读取，失败请手动导入，不会绕过浏览器保护。</p>
+            <div class="input-row"><select id="chrome-profile" aria-label="Chrome 配置"><option value="">先检测配置文件</option></select><button id="detect-chrome">检测 Chrome</button></div>
+            <div class="actions"><button id="authorize-chrome">授权选定配置</button><button id="sync-chrome">立即同步</button><button id="revoke-chrome">撤销授权</button></div>
+            <p id="chrome-state" class="muted"></p>
+          </div>
+        </div>
+        <details class="guide"><summary>如何从 Chrome 导出 Cookie？</summary>
+          <ol><li>在 Chrome 中打开目标平台，使用你自己的账号登录。</li><li>自行在 Chrome 扩展商店选择可信、支持 Netscape cookies.txt 的本地导出扩展。核对开发者、权限与隐私政策；优先仅授权当前站点，不安装来源不明的扩展。</li><li>在目标平台页面导出当前站点 Cookie，格式选择 Netscape cookies.txt，不选择 JSON。</li><li>点击上方“导入 cookies.txt”。如需自动加载后续导出文件，勾选文件监测并始终导出到同一路径。</li><li>Cookie 过期时，在 Chrome 重新登录，再重新导出或点击 Chrome“立即同步”。程序不能代为登录或刷新服务端会话。</li></ol>
+          <p class="warning">Cookie 相当于登录凭据。不要发送给他人、上传网站或提交到 Git；扩展有能力读取这些凭据，导出完成后可撤销扩展授权。</p>
+        </details>
+        <div class="updates"><h3>yt-dlp 引擎</h3><p id="update-state"></p><div class="actions"><button id="check-update">检查更新</button><button id="install-update">确认安装更新（空闲时）</button><button id="rollback">回滚上一版本</button></div><p class="muted">仅更新下载引擎，校验官方签名与哈希。完整应用、FFmpeg 和 Node.js 需下载新的程序版本。</p></div>
+      </details>
+    </section>
+  </main>
+  <footer>仅下载你有权保存的内容 · 不提供代理服务，不绕过 DRM 或平台访问限制</footer>
+</body>
+</html>

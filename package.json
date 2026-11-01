@@ -1,0 +1,57 @@
+{
+  "name": "ytb-dl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local video downloader powered by yt-dlp",
+  "main": "dist/main/index.cjs",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.*",
+    "test:ui": "playwright test",
+    "prepare:tools": "tsx scripts/prepare-tools.ts",
+    "start": "npm run build && electron .",
+    "package": "npm run build && tsx scripts/check-tools.ts && electron-builder",
+    "package:all": "npm run build && tsx scripts/check-tools.ts --all && electron-builder --mac --win --x64 --arm64",
+    "checksums": "node scripts/checksums.mjs",
+    "smoke:package": "tsx scripts/smoke-package.ts"
+  },
+  "dependencies": {
+    "openpgp": "6.3.2",
+    "https-proxy-agent": "7.0.6",
+    "socks-proxy-agent": "8.0.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "@types/node": "22.15.30",
+    "electron": "43.8.3",
+    "electron-builder": "26.18.0",
+    "esbuild": "0.25.12",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
+  },
+  "build": {
+    "appId": "io.github.ninghaofeng.ytbdl",
+    "productName": "ytb-dl-ui",
+    "artifactName": "ytb-dl-ui-${version}-${os}-${arch}.${ext}",
+    "directories": { "output": "release" },
+    "files": ["dist/**/*", "package.json"],
+    "extraResources": [
+      { "from": "resources/${os}-${arch}", "to": "tools" },
+      { "from": "resources/public.key", "to": "public.key" },
+      { "from": "README.md", "to": "README.md" }
+    ],
+    "mac": {
+      "target": ["zip"],
+      "identity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "category": "public.app-category.utilities"
+    },
+    "win": { "target": ["portable"], "signAndEditExecutable": false },
+    "portable": { "requestExecutionLevel": "user" },
+    "publish": null
+  }
+}

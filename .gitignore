@@ -1,0 +1,11 @@
+node_modules/
+dist/
+release/
+resources/*/
+resources/public.key
+test-results/
+playwright-report/
+.DS_Store
+*.part
+*.cookies.txt
+*[Cc]ookies*.txt
