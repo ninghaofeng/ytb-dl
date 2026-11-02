@@ -5,6 +5,7 @@ import { Store } from './store';
 import { Cookies } from './cookies';
 import { Engine } from './engine';
 import { Updates } from './updates';
+import { Formats } from './formats';
 import { settings, proxyUrl, options, errorMessage } from './validation';
 import type { Api, CookieMode, Settings, Snapshot } from '../shared/types';
 import type { Tools } from './arguments';
@@ -12,12 +13,14 @@ import { run } from './process';
 
 let win: BrowserWindow | undefined;
 let quitting = false;
+let stopping = false;
 let confirming = false;
 let notification: NodeJS.Timeout | undefined;
 let store: Store;
 let cookies: Cookies;
 let engine: Engine;
 let updates: Updates;
+let formats: Formats;
 const testing = process.env.YTB_DL_TEST === '1' && !app.isPackaged;
 const customData = app.commandLine.getSwitchValue('user-data-dir');
 
@@ -68,7 +71,8 @@ async function start(): Promise<void> {
     : run;
   cookies = new Cookies(store, () => updates.yt(), changed, launch);
   engine = new Engine(store, tools, cookies, proxy, changed, launch);
-  updates = new Updates(store, bundled.yt, key, proxy, () => engine.busy, paused => { engine.paused = paused; if (!paused) engine.schedule(); }, changed);
+  formats = new Formats(tools, cookies, proxy, changed, () => engine.paused || stopping, launch);
+  updates = new Updates(store, bundled.yt, key, proxy, () => engine.busy || formats.busy, paused => { engine.paused = paused; if (!paused) engine.schedule(); }, changed);
   await cookies.init();
   await updates.init();
   store.save();
@@ -108,15 +112,17 @@ async function requestQuit(): Promise<void> {
   if (confirming || quitting) return;
   confirming = true;
   try {
-    if (engine.busy || store.state.tasks.some(t => t.status === 'queued') || ['waiting', 'installing', 'checking'].includes(updates.info.status)) {
+    if (engine.busy || formats.busy || store.state.tasks.some(t => t.status === 'queued') || ['waiting', 'installing', 'checking'].includes(updates.info.status)) {
       const answer = await dialog.showMessageBox(win!, { type: 'question', buttons: ['继续运行', '终止任务并退出'], defaultId: 0, cancelId: 0, message: '正在下载、解析或更新，确定退出？', detail: '下载任务会保留部分文件并在下次启动时尝试恢复。更新安装会等待完成，避免损坏引擎。' });
       if (answer.response !== 1) return;
     }
+    stopping = true;
+    await formats.cancel();
     await engine.stop();
     await updates.stop().catch(e => { store.warning = `退出时更新检查失败：${errorMessage(e)}`; store.save(); });
     quitting = true;
     app.quit();
-  } catch (e) { await dialog.showMessageBox(win!, { type: 'error', message: `退出失败：${errorMessage(e)}`, detail: '程序仍保持运行，请检查任务与磁盘状态。' }); }
+  } catch (e) { stopping = false; await dialog.showMessageBox(win!, { type: 'error', message: `退出失败：${errorMessage(e)}`, detail: '程序仍保持运行，请检查任务与磁盘状态。' }); }
   finally { confirming = false; }
 }
 function handle<K extends keyof Api>(name: K, fn: Api[K]): void {
@@ -189,6 +195,20 @@ function registerApi(): void {
   handle('enqueuePlaylist', async input => {
     if (!input || !Array.isArray(input.ids) || !input.ids.every(id => typeof id === 'string') || typeof input.all !== 'boolean') throw new Error('条目选择无效。');
     return engine.enqueueEntries(input.ids, input.all, options(input.options));
+  });
+  handle('selectedPlaylist', async input => {
+    if (!input || !Array.isArray(input.ids) || !input.ids.every(id => typeof id === 'string') || typeof input.all !== 'boolean') throw new Error('条目选择无效。');
+    return engine.selectedEntries(input.ids, input.all);
+  });
+  handle('inspectFormats', async input => {
+    if (!input) throw new Error('格式解析参数无效。');
+    return formats.inspect(text(input.url), mode(input.cookie));
+  });
+  handle('cancelInspection', async () => formats.cancel());
+  handle('enqueueFormats', async input => {
+    if (!input || stopping) throw new Error('格式确认参数无效或程序正在退出。');
+    const selected = formats.selection(text(input.inspection), input.selection);
+    return engine.enqueue([selected.url], { kind: 'video', container: 'original', height: 0, cookie: selected.cookie, selection: selected.selection });
   });
   handle('cancel', async id => engine.cancel(text(id)));
   handle('retry', async id => engine.retry(text(id)));

@@ -176,11 +176,14 @@ export class Engine {
     await this.parseWork;
   }
   enqueueEntries(ids: string[], all: boolean, o: DownloadOptions): { added: number; duplicates: number } {
+    return this.enqueue(this.selectedEntries(ids, all).map(e => e.url), o);
+  }
+  selectedEntries(ids: string[], all: boolean): PlaylistEntry[] {
     if (!this.playlist || this.playlist.status === 'running') throw new Error('请等待解析完成或停止解析后选择。');
     const requested = new Set(ids);
     const selected = all ? this.entries : this.entries.filter(e => requested.has(e.id));
     if (!selected.length) throw new Error('请勾选要下载的条目。');
-    return this.enqueue(selected.map(e => e.url), o);
+    return selected;
   }
   async stop(): Promise<void> {
     this.stopping = true;

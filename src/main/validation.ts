@@ -1,4 +1,4 @@
-import type { DownloadOptions, Settings } from '../shared/types';
+import type { DownloadOptions, Settings, StreamSelection } from '../shared/types';
 
 const domains = ['youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com', 'tiktok.com'];
 export function videoUrl(value: unknown): string {
@@ -20,7 +20,21 @@ export function options(value: unknown): DownloadOptions {
       typeof v.height !== 'number' || !['none', 'file', 'chrome'].includes(String(v.cookie))) {
     throw new Error('下载格式、画质或 Cookie 来源无效。');
   }
-  return { kind: v.kind as DownloadOptions['kind'], container: v.container as DownloadOptions['container'], height: v.height, cookie: v.cookie as DownloadOptions['cookie'] };
+  const selection = v.selection === undefined ? undefined : streamSelection(v.selection);
+  if (selection && (v.kind !== 'video' || v.container !== 'original' || v.height !== 0)) throw new Error('精确格式选择不能与 MP3 转码、画质上限或预设容器混用。');
+  return { kind: v.kind as DownloadOptions['kind'], container: v.container as DownloadOptions['container'], height: v.height, cookie: v.cookie as DownloadOptions['cookie'], ...(selection ? { selection } : {}) };
+}
+export function formatId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(value);
+}
+export function streamSelection(value: unknown): StreamSelection {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('请选择真实的音视频格式。');
+  const v = value as Record<string, unknown>;
+  if (Object.keys(v).some(k => !['video', 'audio', 'combined'].includes(k)) ||
+      Object.values(v).some(id => !formatId(id)) ||
+      (!v.video && !v.audio && !v.combined) || (v.combined && (v.video || v.audio)) ||
+      (v.video && v.video === v.audio)) throw new Error('音视频格式选择无效，不能混用合一流与独立流。');
+  return { ...(v.video ? { video: v.video as string } : {}), ...(v.audio ? { audio: v.audio as string } : {}), ...(v.combined ? { combined: v.combined as string } : {}) };
 }
 export function settings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('设置无效。');

@@ -21,20 +21,37 @@
       <div class="heading"><h2>开始下载</h2><span class="muted">支持分享文字 · 每行一个链接</span></div>
       <label for="urls" class="sr-only">视频或播放列表链接</label>
       <textarea id="urls" rows="3" placeholder="粘贴 YouTube、抖音或 TikTok 链接&#10;也可以粘贴分享文字，程序会提取链接"></textarea>
-      <div class="options">
-        <label>下载类型<select id="kind"><option value="video">视频</option><option value="mp3">音频 MP3</option></select></label>
-        <label>画质上限<select id="height"><option value="0">最佳画质</option><option value="2160">4K / 2160p</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option><option value="360">360p</option></select></label>
-        <label>视频格式<select id="container"><option value="original">原始格式（推荐）</option><option value="mp4">兼容 MP4 / H.264</option></select></label>
+      <div class="source-options">
         <label>Cookie 来源<select id="cookie"><option value="none">不使用 Cookie</option><option value="file">导出的文件</option><option value="chrome">Chrome 自动读取</option></select></label>
+        <p class="muted">先查看每个视频的真实格式，再分别选择视频与音频编码。仅下载或合并源流，不重新编码。</p>
       </div>
-      <div class="actions"><button id="download" class="primary">加入下载队列</button><button id="parse">解析播放列表</button><span class="muted">MP4 不可用时会提示，不默认转码视频</span></div>
+      <div class="actions"><button id="download" class="primary">查看可用格式</button><button id="parse">解析播放列表</button><span class="muted">批量链接会逐个选择，未经确认不会下载</span></div>
+    </section>
+    <section id="format-picker" class="card" hidden aria-labelledby="format-heading">
+      <div class="heading"><h2 id="format-heading">选择视频与音频 <small id="format-position"></small></h2><button id="cancel-formats">结束选择</button></div>
+      <h3 id="format-title"></h3><p id="format-url" class="muted"></p>
+      <p id="format-loading" role="status" hidden>正在读取平台提供的格式，尚未开始下载。首次解析可能需要稍等。</p>
+      <p id="format-error" class="warning" role="alert" hidden></p>
+      <div id="format-content" hidden>
+        <p class="muted">编码与容器是两回事。“通常有损”根据编码类型推断，无法确认具体编码模式时不保证；无损编码也不代表上传前的母带无损。原样保存不增加转码损失，也无法恢复源文件已经丢失的信息。未知参数不会猜测。</p>
+        <div class="format-filters">
+          <label class="mode-label">保存方式<select id="stream-mode"><option value="separate">独立视频 + 独立音频</option><option value="combined">音视频合一流</option><option value="video">仅视频（无声音）</option><option value="audio">仅音频（源格式）</option></select></label>
+          <label id="resolution-control" class="mode-label">视频分辨率<select id="resolution"><option value="all">全部分辨率</option></select></label>
+        </div>
+        <p id="resolution-hint" class="muted">仅列出当前保存方式实际可用的分辨率，不放大、不转码。筛选后仍需选择具体编码格式；切换分辨率不会自动改选其他流。</p>
+        <div id="video-formats" class="format-group"><h3>视频流</h3><div id="video-table"></div></div>
+        <div id="audio-formats" class="format-group"><h3>音频流</h3><div id="audio-table"></div></div>
+        <div id="combined-formats" class="format-group"><h3>音视频合一流</h3><div id="combined-table"></div></div>
+        <p id="format-summary" class="selection-summary" aria-live="polite"></p>
+      </div>
+      <div class="actions"><button id="confirm-formats" class="primary" disabled>确认格式并加入队列</button><button id="retry-formats">重新解析</button><button id="skip-formats">跳过此视频</button></div>
     </section>
     <section id="playlist" class="card" hidden>
       <div class="heading"><h2>播放列表 <small id="playlist-count"></small></h2><button id="stop-parse">停止解析</button></div>
       <p id="playlist-error" class="warning" hidden></p>
       <label class="check"><input id="all-entries" type="checkbox"> 下载全部已解析条目（跨页）</label>
       <div id="entries"></div>
-      <div class="actions"><button id="prev-page">上一页</button><span id="page-label"></span><button id="next-page">下一页</button><button id="download-selected" class="primary">下载选中条目</button></div>
+      <div class="actions"><button id="prev-page">上一页</button><span id="page-label"></span><button id="next-page">下一页</button><button id="download-selected" class="primary">逐个选择条目格式</button></div>
     </section>
     <section class="card">
       <div class="heading"><h2>下载任务 <small id="task-count">0</small></h2><button id="clear-tasks">清理已结束记录</button></div>

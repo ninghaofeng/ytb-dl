@@ -11,11 +11,81 @@ import { downloadArgs, type Tools } from '../src/main/arguments';
 import type { Task } from '../src/shared/types';
 import { verifyManifest, Updates, BUNDLED_YT_VERSION, assetName } from '../src/main/updates';
 import { Store } from '../src/main/store';
+import { sourceFormats } from '../src/main/formats';
 
 const toolRoot = path.resolve('resources', `${process.platform === 'darwin' ? 'mac' : 'win'}-${process.arch}`);
 const suffix = process.platform === 'win32' ? '.exe' : '';
 const tools: Tools = { yt: path.join(toolRoot, `yt-dlp${suffix}`), ffmpeg: path.join(toolRoot, `ffmpeg${suffix}`), ffprobe: path.join(toolRoot, `ffprobe${suffix}`), node: path.join(toolRoot, `node${suffix}`) };
 const available = existsSync(tools.yt) && existsSync(tools.ffmpeg);
+
+test('exact source video and audio IDs merge without re-encoding or fallback', { skip: !available, timeout: 240_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ytbdl-source-streams-'));
+  let server: http.Server | undefined;
+  try {
+    const video = path.join(root, 'video.mp4'), audio = path.join(root, 'audio.flac');
+    await run(tools.ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=128x72:rate=5:duration=1', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', video]).done;
+    await run(tools.ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-vn', '-c:a', 'flac', audio]).done;
+    const files = new Map([['/video.mp4', await readFile(video)], ['/audio.flac', await readFile(audio)]]);
+    server = http.createServer((request, response) => {
+      const data = files.get(request.url || '');
+      if (!data) { response.writeHead(404); response.end(); return; }
+      const start = Number(request.headers.range?.match(/bytes=(\d+)-/)?.[1] || 0);
+      response.writeHead(start ? 206 : 200, {
+        'Content-Type': request.url?.endsWith('mp4') ? 'video/mp4' : 'audio/flac',
+        'Content-Length': data.length - start, 'Accept-Ranges': 'bytes',
+        ...(start ? { 'Content-Range': `bytes ${start}-${data.length - 1}/${data.length}` } : {})
+      });
+      response.end(request.method === 'HEAD' ? undefined : data.subarray(start));
+    });
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const base = `http://127.0.0.1:${address.port}`;
+    const metadata = {
+      id: 'local-source', title: 'source streams', extractor: 'generic', extractor_key: 'Generic',
+      webpage_url: 'https://youtube.com/watch?v=local-source',
+      formats: [
+        { format_id: 'chosen-video', url: `${base}/video.mp4`, ext: 'mp4', vcodec: 'avc1.64000a', acodec: 'none', width: 128, height: 72, fps: 5 },
+        { format_id: 'chosen-audio', url: `${base}/audio.flac`, ext: 'flac', vcodec: 'none', acodec: 'flac', asr: 44100, audio_channels: 1 }
+      ]
+    };
+    assert.deepEqual(sourceFormats(metadata).formats.map(f => f.type), ['video', 'audio']);
+    const info = path.join(root, 'metadata.json'); await writeFile(info, JSON.stringify(metadata));
+    let inspected = false;
+    await run(tools.yt, ['--ignore-config', '--proxy', '', '--skip-download', '--dump-json', '--load-info-json', info], line => {
+      if (!line.startsWith('{')) return;
+      const actual = sourceFormats(JSON.parse(line));
+      assert.deepEqual(actual.formats.map(f => f.id).sort(), ['chosen-audio', 'chosen-video']);
+      assert.equal(actual.formats.find(f => f.id === 'chosen-audio')!.audioCompression, 'lossless');
+      inspected = true;
+    }).done;
+    assert.ok(inspected, 'real yt-dlp must emit selectable format metadata before downloading');
+    const task: Task = {
+      id: randomUUID(), url: metadata.webpage_url, title: metadata.title, directory: root,
+      options: { kind: 'video', container: 'original', height: 0, cookie: 'none', selection: { video: 'chosen-video', audio: 'chosen-audio' } },
+      status: 'queued', progress: 0, speed: '', eta: '', error: '', file: '', createdAt: ''
+    };
+    let output = '';
+    const args = [...downloadArgs(task, tools, '', '').slice(0, -2), '--proxy', '', '--load-info-json', info];
+    await run(tools.yt, args, line => { if (line.startsWith('FILE:')) output = JSON.parse(line.slice(5)); }).done;
+    assert.ok(output.endsWith('.mkv'), output);
+    let probe = '';
+    await run(tools.ffprobe, ['-v', 'error', '-show_entries', 'stream=codec_name', '-of', 'json', output], line => { probe += line; }).done;
+    assert.deepEqual(JSON.parse(probe).streams.map((s: { codec_name: string }) => s.codec_name), ['h264', 'flac']);
+    async function packetHash(file: string, stream: string): Promise<string> {
+      let hash = '';
+      await run(tools.ffmpeg, ['-v', 'error', '-i', file, '-map', stream, '-c', 'copy', '-f', 'hash', '-hash', 'sha256', '-'], line => { hash += line; }).done;
+      assert.match(hash, /^SHA256=/);
+      return hash;
+    }
+    assert.equal(await packetHash(output, '0:v:0'), await packetHash(video, '0:v:0'), 'encoded video packets must be unchanged');
+    assert.equal(await packetHash(output, '0:a:0'), await packetHash(audio, '0:a:0'), 'encoded audio packets must be unchanged');
+    await assert.rejects(run(tools.yt, [...args.slice(0, args.indexOf('-f') + 1), 'unavailable-video+chosen-audio', ...args.slice(args.indexOf('-f') + 2)]).done, /Requested format is not available/);
+  } finally {
+    if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); }
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('real bundled media tools: Range resume, protocol, MP3 and final file', { skip: !available, timeout: 240_000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ytbdl-range-'));
