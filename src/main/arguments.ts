@@ -22,9 +22,12 @@ export function downloadArgs(t: Task, tools: Tools, proxy: string, cookies: stri
     '--newline', '--progress', '--progress-delta', '1',
     '--progress-template', 'download:DL:%(progress)j',
     '--progress-template', 'postprocess:PP:%(progress)j',
-    '--print', 'before_dl:INFO:%(.{id,title})j',
+    '--print', 'before_dl:INFO:%(.{id,title,chapters})j',
     '--print', 'post_process:STAGE:%(id)j',
     '--print', 'after_move:FILE:%(filepath)j',
     '--no-simulate', '-o', path.join(t.directory, `${t.id.slice(0, 8)}-%(title).120B [%(id)s].%(ext)s`),
-    ...formatArgs(t.options), '--', t.url];
+    ...formatArgs(t.options),
+    t.options.embedChapters ? '--embed-chapters' : '--no-embed-chapters', '--no-embed-info-json',
+    ...(t.options.subtitles?.length ? ['--no-write-subs', '--no-write-auto-subs', '--sub-langs', 'all', '--sub-format', 'vtt/srt/ass/ssa', '--embed-subs'] : []),
+    '--', t.url];
 }

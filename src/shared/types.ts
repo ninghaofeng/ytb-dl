@@ -3,6 +3,9 @@ export type TaskStatus = 'queued' | 'syncing' | 'downloading' | 'processing' | '
 export interface StreamSelection { video?: string; audio?: string; combined?: string }
 export type MergeFormat = 'mkv' | 'mov' | 'mp4';
 export type Compression = 'lossy' | 'lossless' | 'unknown';
+export interface Chapter { title: string; start: number; end: number }
+export interface SubtitleSelection { language: string; source: 'manual' | 'automatic' }
+export interface SubtitleTrack extends SubtitleSelection { name: string; formats: string[] }
 export interface SourceFormat {
   id: string;
   type: 'video' | 'audio' | 'combined';
@@ -30,9 +33,16 @@ export interface FormatInspection {
   title: string;
   formats: SourceFormat[];
   best: StreamSelection;
+  chapters: Chapter[];
+  subtitles: SubtitleTrack[];
 }
 export interface InspectionProgress {
   stage: 'cookies' | 'proxy' | 'metadata';
+  startedAt: number;
+  timeoutMs: number;
+}
+export interface PreparationProgress {
+  stage: 'cookies' | 'proxy' | 'subtitles' | 'starting';
   startedAt: number;
   timeoutMs: number;
 }
@@ -43,6 +53,8 @@ export interface DownloadOptions {
   cookie: CookieMode;
   selection?: StreamSelection;
   mergeFormat?: MergeFormat;
+  embedChapters?: boolean;
+  subtitles?: SubtitleSelection[];
 }
 export interface Task {
   id: string;
@@ -73,6 +85,7 @@ export interface CookieInfo {
   chromeProfile: string;
   lastFileSync: string;
   lastChromeSync: string;
+  chromeCacheExpiresAt: string;
   fileError: string;
   chromeError: string;
 }
@@ -99,6 +112,7 @@ export interface Snapshot {
   warning: string;
   proxyConfigured: boolean;
   inspection: InspectionProgress | null;
+  preparations: Record<string, PreparationProgress>;
 }
 export interface Api {
   snapshot(): Promise<Snapshot>;
@@ -118,7 +132,7 @@ export interface Api {
   selectedPlaylist(input: { ids: string[]; all: boolean }): Promise<PlaylistEntry[]>;
   inspectFormats(input: { url: string; cookie: CookieMode }): Promise<FormatInspection>;
   cancelInspection(): Promise<void>;
-  enqueueFormats(input: { inspection: string; selection: StreamSelection; mergeFormat?: MergeFormat }): Promise<{ added: number; duplicates: number }>;
+  enqueueFormats(input: { inspection: string; selection: StreamSelection; mergeFormat?: MergeFormat; embedChapters: boolean; subtitles: SubtitleSelection[] }): Promise<{ added: number; duplicates: number }>;
   cancel(id: string): Promise<void>;
   retry(id: string): Promise<void>;
   clearFinished(): Promise<void>;

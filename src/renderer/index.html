@@ -43,6 +43,17 @@
         <div id="merge-help"><div class="actions"><button id="best-streams">最佳视频＋最佳音频</button></div><p class="muted">快捷项按 yt-dlp 对当前视频的质量排序选择最佳独立视频和音频（不按文件大小），会清除分辨率筛选；确认后才下载。仅复制原编码合并，MOV/MP4 不兼容时会报错，建议改选 MKV，不自动转码。</p></div>
         <div id="video-formats" class="format-group"><h3>视频流</h3><div id="video-table"></div></div>
         <div id="audio-formats" class="format-group"><h3>音频流</h3><div id="audio-table"></div></div>
+        <div class="format-group">
+          <h3>章节</h3>
+          <label class="check"><input id="embed-chapters" type="checkbox" checked> 嵌入平台提供的章节信息（不分割视频）</label>
+          <p id="chapter-state" class="muted"></p>
+        </div>
+        <div id="subtitle-control" class="format-group">
+          <h3>内挂字幕</h3>
+          <p class="muted">可多选人工字幕和自动生成字幕，同一语言的两种来源可同时内挂。默认不下载；字幕是可切换的内挂轨道，不烧录到画面。仅列出可处理的文本字幕。</p>
+          <div id="subtitle-tracks"></div>
+          <p class="muted">MKV 兼容性更好；MOV/MP4 会将文本字幕转换为 mov_text，视频和音频仍不重新编码。不兼容或所选字幕失效时明确失败，不自动改容器。仅音频不提供字幕内挂。</p>
+        </div>
         <p id="format-summary" class="selection-summary" aria-live="polite"></p>
       </div>
       <div class="actions"><button id="confirm-formats" class="primary" disabled>确认格式并加入队列</button><button id="retry-formats">重新解析</button><button id="skip-formats">跳过此视频</button></div>
@@ -77,14 +88,15 @@
             <div class="actions"><button id="import-cookies">导入 cookies.txt</button><button id="sync-file">重新加载</button><button id="clear-cookies">删除 / 停止监测</button></div>
             <p id="file-state" class="muted"></p>
             <h3>Chrome 自动读取</h3>
-            <p class="muted">授权后，下载与解析前同步。系统加密/权限可能阻止读取，失败请手动导入，不会绕过浏览器保护。</p>
+            <p class="muted">授权后首次读取并保存在本机私密缓存，解析和下载直接复用；到期或明确登录失效时重新读取，每次操作最多自动重试一次。会话 Cookie 最长缓存 6 小时，可跨重启复用。</p>
+            <p class="muted">可手动“立即刷新”；切换配置或撤销授权会清除缓存。缓存文件不加密，请保护本机账号。系统加密/权限可能阻止读取，失败请手动导入，不会绕过浏览器保护。</p>
             <div class="input-row"><select id="chrome-profile" aria-label="Chrome 配置"><option value="">先检测配置文件</option></select><button id="detect-chrome">检测 Chrome</button></div>
-            <div class="actions"><button id="authorize-chrome">授权选定配置</button><button id="sync-chrome">立即同步</button><button id="revoke-chrome">撤销授权</button></div>
+            <div class="actions"><button id="authorize-chrome">授权选定配置</button><button id="sync-chrome">立即刷新</button><button id="revoke-chrome">撤销授权并清除缓存</button></div>
             <p id="chrome-state" class="muted"></p>
           </div>
         </div>
         <details class="guide"><summary>如何从 Chrome 导出 Cookie？</summary>
-          <ol><li>在 Chrome 中打开目标平台，使用你自己的账号登录。</li><li>自行在 Chrome 扩展商店选择可信、支持 Netscape cookies.txt 的本地导出扩展。核对开发者、权限与隐私政策；优先仅授权当前站点，不安装来源不明的扩展。</li><li>在目标平台页面导出当前站点 Cookie，格式选择 Netscape cookies.txt，不选择 JSON。</li><li>点击上方“导入 cookies.txt”。如需自动加载后续导出文件，勾选文件监测并始终导出到同一路径。</li><li>Cookie 过期时，在 Chrome 重新登录，再重新导出或点击 Chrome“立即同步”。程序不能代为登录或刷新服务端会话。</li></ol>
+          <ol><li>在 Chrome 中打开目标平台，使用你自己的账号登录。</li><li>自行在 Chrome 扩展商店选择可信、支持 Netscape cookies.txt 的本地导出扩展。核对开发者、权限与隐私政策；优先仅授权当前站点，不安装来源不明的扩展。</li><li>在目标平台页面导出当前站点 Cookie，格式选择 Netscape cookies.txt，不选择 JSON。</li><li>点击上方“导入 cookies.txt”。如需自动加载后续导出文件，勾选文件监测并始终导出到同一路径。</li><li>Cookie 过期时，在 Chrome 重新登录，再重新导出或点击 Chrome“立即刷新”。程序不能代为登录或刷新服务端会话。</li></ol>
           <p class="warning">Cookie 相当于登录凭据。不要发送给他人、上传网站或提交到 Git；扩展有能力读取这些凭据，导出完成后可撤销扩展授权。</p>
         </details>
         <div class="updates"><h3>yt-dlp 引擎</h3><p id="update-state"></p><div class="actions"><button id="check-update">检查更新</button><button id="install-update">确认安装更新（空闲时）</button><button id="rollback">回滚上一版本</button></div><p class="muted">仅更新下载引擎，校验官方签名与哈希。完整应用、FFmpeg 和 Node.js 需下载新的程序版本。</p></div>

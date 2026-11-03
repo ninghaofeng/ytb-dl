@@ -1,4 +1,4 @@
-import type { DownloadOptions, Settings, StreamSelection } from '../shared/types';
+import type { DownloadOptions, Settings, StreamSelection, SubtitleSelection } from '../shared/types';
 
 const domains = ['youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com', 'tiktok.com'];
 export function videoUrl(value: unknown): string {
@@ -24,7 +24,26 @@ export function options(value: unknown): DownloadOptions {
   if (selection && (v.kind !== 'video' || v.container !== 'original' || v.height !== 0)) throw new Error('精确格式选择不能与 MP3 转码、画质上限或预设容器混用。');
   if (v.mergeFormat !== undefined && (!['mkv', 'mov', 'mp4'].includes(String(v.mergeFormat)) ||
       typeof v.mergeFormat !== 'string' || !selection?.video || !selection.audio)) throw new Error('合并格式必须是 MKV、MOV 或 MP4，且须分别选择视频和音频。');
-  return { kind: v.kind as DownloadOptions['kind'], container: v.container as DownloadOptions['container'], height: v.height, cookie: v.cookie as DownloadOptions['cookie'], ...(selection ? { selection } : {}), ...(v.mergeFormat !== undefined ? { mergeFormat: v.mergeFormat as DownloadOptions['mergeFormat'] } : {}) };
+  if (v.embedChapters !== undefined && typeof v.embedChapters !== 'boolean') throw new Error('章节嵌入选项无效。');
+  const subtitles = v.subtitles === undefined ? undefined : subtitleSelection(v.subtitles);
+  if (subtitles?.length && (!selection?.video || selection.combined || v.kind !== 'video')) throw new Error('字幕内挂需要选择独立视频流，不支持仅音频。');
+  return { kind: v.kind as DownloadOptions['kind'], container: v.container as DownloadOptions['container'], height: v.height, cookie: v.cookie as DownloadOptions['cookie'], ...(selection ? { selection } : {}), ...(v.mergeFormat !== undefined ? { mergeFormat: v.mergeFormat as DownloadOptions['mergeFormat'] } : {}),
+    ...(v.embedChapters !== undefined ? { embedChapters: v.embedChapters } : {}), ...(subtitles !== undefined ? { subtitles } : {}) };
+}
+export function subtitleSelection(value: unknown): SubtitleSelection[] {
+  if (!Array.isArray(value)) throw new Error('字幕选择无效。');
+  const known = new Set<string>();
+  return value.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('字幕选择无效。');
+    const row = item as Record<string, unknown>;
+    if (Object.keys(row).some(key => !['language', 'source'].includes(key)) ||
+        typeof row.language !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(row.language) ||
+        row.language === 'live_chat' || (row.source !== 'manual' && row.source !== 'automatic')) throw new Error('字幕语言或来源无效。');
+    const key = `${row.language}:${row.source}`;
+    if (known.has(key)) throw new Error('不能重复选择同一字幕。');
+    known.add(key);
+    return { language: row.language, source: row.source };
+  });
 }
 export function formatId(value: unknown): value is string {
   return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(value);

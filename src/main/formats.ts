@@ -5,6 +5,7 @@ import { formatId, streamSelection, videoUrl } from './validation';
 import type { Cookies } from './cookies';
 import { run, type Running } from './process';
 import type { ProxyResolver } from './proxy';
+import { sourceChapters, sourceSubtitles, validateSubtitles, type InspectedSource } from './metadata';
 
 export function compression(codec: string): Compression {
   if (/^(flac|alac|pcm(?:_|$)|ffv1|huffyuv|utvideo|rawvideo)/i.test(codec)) return 'lossless';
@@ -18,7 +19,7 @@ function positive(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 function label(value: unknown): string { return typeof value === 'string' ? value.slice(0, 500) : ''; }
-export function sourceFormats(value: unknown): { title: string; formats: SourceFormat[]; best: StreamSelection } {
+export function sourceFormats(value: unknown): Pick<FormatInspection, 'title' | 'formats' | 'best' | 'chapters' | 'subtitles'> {
   const raw = record(value);
   if (!raw || typeof raw.title !== 'string' || raw._type === 'playlist' || raw.entries) throw new Error('未返回单视频格式，请先解析播放列表并选择条目。');
   const rows: unknown[] = Array.isArray(raw.formats) ? raw.formats : [raw];
@@ -47,7 +48,8 @@ export function sourceFormats(value: unknown): { title: string; formats: SourceF
   // yt-dlp orders formats from worst to best using its extractor-specific quality rules.
   const ranked = [...formats].reverse();
   const video = ranked.find(f => f.type === 'video'), audio = ranked.find(f => f.type === 'audio');
-  return { title: raw.title.slice(0, 1000), formats, best: { ...(video ? { video: video.id } : {}), ...(audio ? { audio: audio.id } : {}) } };
+  return { title: raw.title.slice(0, 1000), formats, best: { ...(video ? { video: video.id } : {}), ...(audio ? { audio: audio.id } : {}) },
+    chapters: sourceChapters(raw), subtitles: sourceSubtitles(raw) };
 }
 export function validateSelection(formats: SourceFormat[], value: unknown): StreamSelection {
   const selection = streamSelection(value);
@@ -64,7 +66,7 @@ export class Formats {
   private owner = '';
   private cancelled = false;
   private interrupt?: (error: Error) => void;
-  private current?: { result: FormatInspection; cookie: CookieMode };
+  private current?: { result: FormatInspection; cookie: CookieMode; source: InspectedSource };
   get busy(): boolean { return !!this.work; }
   constructor(private tools: () => Tools, private cookies: Cookies, private proxy: ProxyResolver, private changed: () => void, private blocked: () => boolean, private launch: typeof run = run, private limits = { cookies: 120_000, proxy: 20_000, metadata: 120_000 }) {}
   private async stage<T>(stage: InspectionProgress['stage'], operation: () => Promise<T>, stop?: (pending: Promise<T>) => Promise<void>): Promise<T> {
@@ -103,45 +105,46 @@ export class Formats {
     return this.work;
   }
   private async inspectRun(url: string, mode: CookieMode): Promise<FormatInspection> {
-    let cookie = '';
     try {
-      cookie = await this.stage('cookies', () => this.cookies.snapshot(mode, this.owner), async pending => {
+      const inspected = await this.cookies.withSnapshot(mode, this.owner, async cookie => {
+        if (this.cancelled) throw new Error('已取消格式解析。');
+        const cookieIdentity = await this.cookies.snapshotIdentity(mode, cookie);
+        const proxy = await this.stage('proxy', async () => this.proxy(url));
+        if (this.cancelled) throw new Error('已取消格式解析。');
+        let metadata: ReturnType<typeof sourceFormats> | undefined;
+        let raw: Record<string, unknown> | undefined;
+        await this.stage('metadata', async () => {
+          this.process = this.launch(this.tools().yt, [...commonArgs(this.tools(), proxy, cookie), '--no-playlist', '--skip-download', '--dump-json', '--', url], line => {
+            if (!line.startsWith('{')) return;
+            if (metadata) throw new Error('格式解析意外返回多个视频，请先解析播放列表。');
+            const parsed = JSON.parse(line) as Record<string, unknown>;
+            metadata = sourceFormats(parsed);
+            raw = parsed;
+          });
+          await this.process.done;
+        }, async () => { await this.process?.stop(); });
+        if (this.cancelled) throw new Error('已取消格式解析。');
+        if (!metadata || !raw) throw new Error('引擎未返回视频格式。');
+        return { result: { id: this.owner, url, ...metadata }, source: { url, cookieIdentity, proxy, inspectedAt: Date.now(), raw } };
+      }, () => this.stage('cookies', () => this.cookies.snapshot(mode, this.owner), async pending => {
         if (mode !== 'none') await this.cookies.cancelSnapshot(this.owner);
         const late = await pending.catch(() => '');
         await this.cookies.removeSnapshot(late);
-      });
-      if (this.cancelled) throw new Error('已取消格式解析。');
-      const proxy = await this.stage('proxy', async () => this.proxy(url));
-      if (this.cancelled) throw new Error('已取消格式解析。');
-      let metadata: ReturnType<typeof sourceFormats> | undefined;
-      await this.stage('metadata', async () => {
-        this.process = this.launch(this.tools().yt, [...commonArgs(this.tools(), proxy, cookie), '--no-playlist', '--skip-download', '--dump-json', '--', url], line => {
-        if (!line.startsWith('{')) return;
-        if (metadata) throw new Error('格式解析意外返回多个视频，请先解析播放列表。');
-        metadata = sourceFormats(JSON.parse(line));
-        });
-        await this.process.done;
-      }, async () => { await this.process?.stop(); });
-      if (this.cancelled) throw new Error('已取消格式解析。');
-      if (!metadata) throw new Error('引擎未返回视频格式。');
-      const result = { id: this.owner, url, ...metadata };
-      this.current = { result, cookie: mode };
-      return result;
+      }));
+      this.current = { ...inspected, cookie: mode };
+      return inspected.result;
     } finally {
-      try { await this.cookies.removeSnapshot(cookie); }
-      catch (error) { this.current = undefined; throw error; }
-      finally {
-        this.process = undefined; this.work = undefined; this.info = null; this.changed();
-      }
+      this.process = undefined; this.work = undefined; this.info = null; this.changed();
     }
   }
-  selection(id: string, value: unknown): { url: string; cookie: CookieMode; selection: StreamSelection } {
+  selection(id: string, value: unknown, subtitles: unknown = []): { url: string; cookie: CookieMode; selection: StreamSelection; subtitles: ReturnType<typeof validateSubtitles>; source: InspectedSource } {
     if (this.busy || !this.current || this.current.result.id !== id) throw new Error('格式列表已失效，请重新解析当前视频。');
-    return { url: this.current.result.url, cookie: this.current.cookie, selection: validateSelection(this.current.result.formats, value) };
+    return { url: this.current.result.url, cookie: this.current.cookie, selection: validateSelection(this.current.result.formats, value), subtitles: validateSubtitles(this.current.result.subtitles, subtitles), source: this.current.source };
   }
   async cancel(): Promise<void> {
     this.cancelled = true; this.current = undefined;
     this.interrupt?.(new Error('已取消格式解析。'));
+    if (this.work) await this.cookies.cancelSnapshot(this.owner);
     // The caller of inspect receives the original extraction or cancellation error.
     await this.work?.catch(() => {});
   }

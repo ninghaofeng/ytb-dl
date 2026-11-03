@@ -8,8 +8,8 @@ export interface Running {
   stop(): Promise<void>;
   diagnostics(): string;
 }
-export function run(executable: string, args: string[], onLine: (line: string) => void = () => {}, cwd?: string): Running {
-  const child = spawn(executable, args, { shell: false, windowsHide: true, detached: process.platform !== 'win32', cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+export function run(executable: string, args: string[], onLine: (line: string) => void = () => {}, cwd?: string, input?: string): Running {
+  const child = spawn(executable, args, { shell: false, windowsHide: true, detached: process.platform !== 'win32', cwd, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
   let stderr = '';
   let protocolError: unknown;
   let settled = false;
@@ -28,6 +28,10 @@ export function run(executable: string, args: string[], onLine: (line: string) =
       else if (code === 0) resolve();
       else reject(new Error(redact(stderr.trim()) || `引擎退出：${code ?? signal}。如需登录，请在 Chrome 重新登录并同步 Cookie。`));
     });
+    if (input !== undefined) {
+      child.stdin!.on('error', error => { protocolError = error; });
+      child.stdin!.end(input);
+    }
   });
   async function stop(): Promise<void> {
     if (settled || !child.pid) return;

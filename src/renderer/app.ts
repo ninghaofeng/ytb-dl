@@ -1,4 +1,4 @@
-import type { Compression, CookieMode, FormatInspection, MergeFormat, Snapshot, SourceFormat, StreamSelection, TaskStatus } from '../shared/types';
+import type { Compression, CookieMode, FormatInspection, MergeFormat, PreparationProgress, Snapshot, SourceFormat, StreamSelection, SubtitleSelection, TaskStatus } from '../shared/types';
 
 const api = window.downloader;
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -11,7 +11,18 @@ function select(id: string): HTMLSelectElement { return el<HTMLSelectElement>(id
 let state: Snapshot;
 let playlistId = '', page = 0, taskPage = 0;
 const selected = new Set<string>();
-const labels: Record<TaskStatus, string> = { queued: '排队中', syncing: '准备 / 同步 Cookie', downloading: '下载中', processing: '合并 / 转换中', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' };
+const labels: Record<TaskStatus, string> = { queued: '排队中', syncing: '准备中', downloading: '下载中', processing: '合并 / 转换中', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' };
+const preparationLabels: Record<PreparationProgress['stage'], string> = { cookies: '准备 Cookie 副本', proxy: '解析代理', subtitles: '读取字幕信息', starting: '启动下载引擎 / 获取下载地址' };
+function preparationText(value: PreparationProgress): string {
+  const elapsed = Math.max(0, Math.floor((Date.now() - value.startedAt) / 1000));
+  return `${preparationLabels[value.stage]} · 已等待 ${elapsed} 秒 / 上限 ${value.timeoutMs / 1000} 秒 · 尚未开始媒体传输`;
+}
+function updateTaskPreparations(): void {
+  for (const node of Array.from(document.querySelectorAll<HTMLElement>('[data-preparation-task]'))) {
+    const value = state?.preparations[node.dataset.preparationTask!];
+    if (value) node.textContent = preparationText(value);
+  }
+}
 function notice(message: string, error = false): void {
   el('notice').textContent = message;
   el('notice').classList.toggle('error', error);
@@ -51,7 +62,8 @@ function render(s: Snapshot, initial = false): void {
   el('proxy-state').textContent = s.proxyConfigured ? '正在使用手动代理（凭据使用系统安全存储）。留空不更改；删除后跟随系统代理。' : '默认跟随系统代理；系统未配置代理或规则指定直连时直接连接。';
   const c = s.cookies;
   el('file-state').textContent = c.fileError || `${c.file ? '已导入' : '未导入'} · ${c.watching ? '正在监测原始文件' : '未监测'}${c.lastFileSync ? ` · 同步于 ${new Date(c.lastFileSync).toLocaleString()}` : ''}`;
-  el('chrome-state').textContent = c.chromeError || `${c.chromeAuthorized ? `已授权 ${c.chromeProfile}` : '未授权'}${c.lastChromeSync ? ` · 同步于 ${new Date(c.lastChromeSync).toLocaleString()}` : ''}`;
+  const cache = c.chromeCacheExpiresAt ? (Date.parse(c.chromeCacheExpiresAt) > Date.now() ? ` · 缓存有效至 ${new Date(c.chromeCacheExpiresAt).toLocaleString()}` : ' · 缓存已到期，下次使用时刷新') : ' · 尚无缓存';
+  el('chrome-state').textContent = c.chromeError || `${c.chromeAuthorized ? `已授权 ${c.chromeProfile}${cache}` : '未授权'}${c.lastChromeSync ? ` · 最近读取 ${new Date(c.lastChromeSync).toLocaleString()}` : ''}`;
   const u = s.update;
   el('update-state').textContent = `当前 ${u.current}${u.latest ? ` · 上游 ${u.latest}` : ''} · ${({ idle: '就绪', checking: '检查中', available: '有可用更新，请确认安装', waiting: '等待下载空闲后安装', installing: '正在校验并安装', error: '发生错误' })[u.status]}${u.error ? `：${u.error}` : ''}`;
   el<HTMLButtonElement>('install-update').disabled = u.status !== 'available';
@@ -79,12 +91,21 @@ function renderTasks(): void {
   for (const task of state.tasks.slice(taskPage * 30, (taskPage + 1) * 30).reverse()) {
     const row = text('div', '', 'task');
     const head = text('div', '', 'task-head');
-    const badge = text('span', labels[task.status], 'badge');
+    const preparation = state.preparations[task.id];
+    const badge = text('span', preparation ? preparationLabels[preparation.stage] : labels[task.status], 'badge');
     badge.dataset.status = task.status;
     head.append(text('div', task.title, 'task-title'), badge);
-    const progress = document.createElement('progress'); progress.max = 100; progress.value = task.progress; progress.setAttribute('aria-label', '下载进度');
-    row.append(head, progress, text('p', `${task.progress.toFixed(1)}% · ${task.speed || '—'} · 预计 ${task.eta || '—'}`, 'muted'), text('p', task.file || task.directory, 'muted'));
+    const progress = document.createElement('progress'); progress.max = 100;
+    if (!preparation && task.status !== 'syncing') progress.value = task.progress;
+    progress.setAttribute('aria-label', '下载进度');
+    row.append(head, progress);
+    if (preparation) {
+      const detail = text('p', preparationText(preparation), 'muted'); detail.dataset.preparationTask = task.id; row.append(detail);
+    } else row.append(text('p', `${task.progress.toFixed(1)}% · ${task.speed || '—'} · 预计 ${task.eta || '—'}`, 'muted'));
+    row.append(text('p', task.file || task.directory, 'muted'));
     if (task.options.selection) row.append(text('p', selectionLabel(task.options.selection, task.options.mergeFormat), 'muted'));
+    if (task.options.embedChapters) row.append(text('p', '嵌入平台章节（如有）', 'muted'));
+    if (task.options.subtitles?.length) row.append(text('p', `内挂字幕：${task.options.subtitles.map(track => `${track.language}（${track.source === 'manual' ? '人工' : '自动生成'}）`).join('、')}`, 'muted'));
     if (task.error) row.append(text('p', task.error, 'warning'));
     const buttons = text('div', '', 'actions');
     if (['queued', 'syncing', 'downloading', 'processing'].includes(task.status)) buttons.append(action('取消', () => api.cancel(task.id)));
@@ -127,7 +148,7 @@ function inspectionProgress(): void {
   el('format-loading').textContent = `${labels[stage]} 此阶段已等待 ${elapsed} 秒，上限 ${Math.ceil(timeoutMs / 1000)} 秒；尚未下载媒体，可点击“结束选择”。`;
 }
 function selectionLabel(s: StreamSelection, mergeFormat: MergeFormat = 'mkv'): string {
-  if (s.combined) return `音视频合一流 #${s.combined} · 原容器，不重新编码`;
+  if (s.combined) return `旧版任务 #${s.combined} · 原容器，不重新编码`;
   return [s.video ? `视频 #${s.video}` : '', s.audio ? `音频 #${s.audio}` : ''].filter(Boolean).join(' + ') +
     (s.video && s.audio ? ` · 合并为 ${mergeFormat.toUpperCase()}，不重新编码` : ' · 保留源格式，不重新编码');
 }
@@ -135,6 +156,27 @@ function chosenStreams(): StreamSelection {
   const chosen = (type: string): string | undefined => el('format-content').querySelector<HTMLInputElement>(`input[name="source-${type}"]:checked`)?.value;
   const mode = select('stream-mode').value;
   return { ...(['separate', 'video'].includes(mode) && chosen('video') ? { video: chosen('video') } : {}), ...(['separate', 'audio'].includes(mode) && chosen('audio') ? { audio: chosen('audio') } : {}) };
+}
+function chosenSubtitles(): SubtitleSelection[] {
+  if (select('stream-mode').value === 'audio') return [];
+  return Array.from(el('subtitle-tracks').querySelectorAll<HTMLInputElement>('input:checked')).map(check => {
+    const track = inspection!.subtitles[Number(check.value)]!;
+    return { language: track.language, source: track.source };
+  });
+}
+function renderMetadata(): void {
+  input('embed-chapters').checked = true;
+  const chapters = inspection!.chapters;
+  el('chapter-state').textContent = chapters.length ? `平台提供 ${chapters.length} 个章节：${chapters.map(chapter => chapter.title).join(' / ')}` : '平台未提供章节；不会自动生成章节。';
+  const host = el('subtitle-tracks'); host.replaceChildren();
+  for (const [index, track] of inspection!.subtitles.entries()) {
+    const label = text('label', '', 'check');
+    const check = document.createElement('input'); check.type = 'checkbox'; check.value = String(index);
+    check.dataset.language = track.language; check.dataset.source = track.source;
+    label.append(check, text('span', `${track.name} · ${track.language} · ${track.source === 'manual' ? '人工字幕' : '自动生成'} · ${track.formats.join(' / ')}`));
+    host.append(label);
+  }
+  if (!inspection!.subtitles.length) host.append(text('p', '平台未提供可内挂的文本字幕。', 'muted'));
 }
 function resolutionKey(format: SourceFormat): string { return `${format.width ?? '?'}x${format.height ?? '?'}`; }
 function resolutionLabel(format: SourceFormat): string {
@@ -180,6 +222,7 @@ function pickerControls(): void {
   el('audio-formats').hidden = !['separate', 'audio'].includes(mode);
   el('merge-control').hidden = mode !== 'separate';
   el('merge-help').hidden = mode !== 'separate';
+  el('subtitle-control').hidden = mode === 'audio';
   const s = chosenStreams();
   const valid = mode === 'separate' ? s.video && s.audio : mode === 'video' ? s.video : s.audio;
   el<HTMLButtonElement>('confirm-formats').disabled = !inspection || !valid || formatLoading || formatSubmitting || formatClosing;
@@ -258,6 +301,7 @@ async function loadFormats(): Promise<void> {
     select('stream-mode').value = has('video') && has('audio') ? 'separate' : has('video') ? 'video' : 'audio';
     if (!has('video') && !has('audio')) throw new Error('平台仅提供音视频合一流，没有可独立选择的视频/音频。当前版本不提供合一流下载。');
     select('merge-format').value = 'mkv';
+    renderMetadata();
     resolutionOptions(true);
     filterResolution();
     el('format-content').hidden = false;
@@ -310,7 +354,8 @@ el('confirm-formats').addEventListener('click', () => {
   formatSubmitting = true; pickerControls();
   void (async () => {
     try {
-      const result = await api.enqueueFormats({ inspection: inspection!.id, selection: chosenStreams(), ...(select('stream-mode').value === 'separate' ? { mergeFormat: select('merge-format').value as MergeFormat } : {}) });
+      const result = await api.enqueueFormats({ inspection: inspection!.id, selection: chosenStreams(), embedChapters: input('embed-chapters').checked, subtitles: chosenSubtitles(),
+        ...(select('stream-mode').value === 'separate' ? { mergeFormat: select('merge-format').value as MergeFormat } : {}) });
       if (formatBatch) { formatBatch.added += result.added; formatBatch.duplicates += result.duplicates; }
       await nextFormat();
     } catch (error) { notice(error instanceof Error ? error.message : String(error), true); }
@@ -355,9 +400,10 @@ bind('detect-chrome', async () => {
 });
 bind('authorize-chrome', () => api.authorizeChrome(select('chrome-profile').value));
 bind('revoke-chrome', () => api.revokeChrome());
-bind('sync-chrome', async () => { await api.syncCookies('chrome'); notice('已读取最新 Cookie；只保留任务需要的临时副本。'); });
+bind('sync-chrome', async () => { await api.syncCookies('chrome'); notice('已从 Chrome 重新读取并更新本机 Cookie 缓存，后续解析和下载将复用。'); });
 bind('check-update', () => api.checkUpdate());
 bind('install-update', async () => { await api.installUpdate(); notice('已确认更新，将在下载与解析空闲时校验安装。'); });
 bind('rollback', async () => { await api.rollback(); notice('已回滚下载引擎。'); });
 api.onChange(s => render(s));
+setInterval(updateTaskPreparations, 1000);
 void api.snapshot().then(s => render(s, true)).catch(e => notice(`初始化失败：${String(e)}`, true));

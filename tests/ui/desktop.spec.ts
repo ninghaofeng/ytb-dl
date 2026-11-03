@@ -2,6 +2,65 @@ import { test, expect, _electron } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Store } from '../../src/main/store';
+
+test('download preparation shows the engine stage, elapsed time and indeterminate progress', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ytbdl-preparation-ui-'));
+  const desktop = await _electron.launch({ args: ['.'], env: { ...process.env, YTB_DL_TEST: '1', YTB_DL_TEST_DATA: root } });
+  try {
+    const page = await desktop.firstWindow();
+    await page.locator('#cookie').selectOption('none');
+    await page.locator('#urls').fill('https://youtube.com/watch?v=startup-wait');
+    await page.locator('#download').click();
+    await expect(page.locator('#format-content')).toBeVisible();
+    await page.locator('#best-streams').click();
+    await page.locator('#subtitle-tracks input[data-language="en"][data-source="manual"]').check();
+    await page.locator('#confirm-formats').click();
+    const detail = page.locator('[data-preparation-task]');
+    await expect(detail).toContainText('启动下载引擎 / 获取下载地址');
+    await expect(page.locator('.task progress')).not.toHaveAttribute('value');
+    await expect(detail).toContainText(/已等待 [12] 秒/);
+    await expect(page.locator('.badge')).toHaveText('已完成');
+    await expect(detail).toHaveCount(0);
+    const snapshot = await page.evaluate(() => window.downloader.snapshot());
+    expect(snapshot.preparations).toEqual({});
+    expect(JSON.stringify(snapshot)).not.toContain('private.invalid');
+  } finally { await desktop.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('Chrome cache is reused for inspection/download and across restart, with manual refresh and revocation', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ytbdl-cookie-cache-ui-'));
+  const store = new Store(root, path.join(root, 'downloads'));
+  store.state.settings.chromeAuthorized = true; store.state.settings.checkUpdates = false; store.save();
+  const launch = () => _electron.launch({ args: ['.'], env: { ...process.env, YTB_DL_TEST: '1', YTB_DL_TEST_DATA: root } });
+  let desktop = await launch();
+  try {
+    let page = await desktop.firstWindow();
+    await page.locator('#settings > summary').click();
+    await page.locator('#sync-chrome').click();
+    await expect(page.locator('#chrome-state')).toContainText('缓存有效至');
+    const first = (await page.evaluate(() => window.downloader.snapshot())).cookies;
+    await page.locator('#cookie').selectOption('chrome');
+    await page.locator('#urls').fill('https://youtube.com/watch?v=cache-ui');
+    await page.locator('#download').click();
+    await expect(page.locator('#format-content')).toBeVisible();
+    await page.locator('#best-streams').click();
+    await page.locator('#confirm-formats').click();
+    await expect(page.locator('.badge')).toHaveText('已完成');
+    expect((await page.evaluate(() => window.downloader.snapshot())).cookies.lastChromeSync).toBe(first.lastChromeSync);
+    await desktop.close();
+    desktop = await launch();
+    page = await desktop.firstWindow();
+    await page.locator('#settings > summary').click();
+    await expect(page.locator('#chrome-state')).toContainText('缓存有效至');
+    expect((await page.evaluate(() => window.downloader.snapshot())).cookies.lastChromeSync).toBe(first.lastChromeSync);
+    await page.locator('#sync-chrome').click();
+    await expect.poll(async () => (await page.evaluate(() => window.downloader.snapshot())).cookies.lastChromeSync).not.toBe(first.lastChromeSync);
+    await page.locator('#revoke-chrome').click();
+    await expect(page.locator('#chrome-state')).toHaveText('未授权');
+    expect((await page.evaluate(() => window.downloader.snapshot())).cookies.chromeCacheExpiresAt).toBe('');
+  } finally { await desktop.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 function contrast(foreground: string, background: string): number {
   function luminance(color: string): number {
@@ -31,6 +90,16 @@ test('best video and audio shortcut requires confirmation and saves the chosen M
       await expect(page.locator('#stream-mode')).toContainText('音视频下载后合并');
       await expect(page.locator('#stream-mode option[value="combined"]')).toHaveCount(0);
       await expect(page.locator('#merge-format')).toHaveValue('mkv');
+      await expect(page.locator('#embed-chapters')).toBeChecked();
+      await expect(page.locator('#chapter-state')).toContainText('2 个章节');
+      await expect(page.locator('#subtitle-tracks input:checked')).toHaveCount(0);
+      await expect(page.locator('#subtitle-tracks')).toContainText('<English>');
+      await expect(page.locator('#subtitle-tracks script')).toHaveCount(0);
+      await page.locator('#subtitle-tracks input[data-language="en"][data-source="manual"]').check();
+      await page.locator('#subtitle-tracks input[data-language="en"][data-source="automatic"]').check();
+      await page.locator('#subtitle-tracks input[data-language="zh-Hans"]').check();
+      await expect(page.locator('#subtitle-tracks input:checked')).toHaveCount(3);
+      if (index === 1) await page.locator('#embed-chapters').uncheck();
       await page.locator('#resolution').selectOption('1280x720');
       await page.locator('#best-streams').click();
       await expect(page.locator('#resolution')).toHaveValue('all');
@@ -44,12 +113,28 @@ test('best video and audio shortcut requires confirmation and saves the chosen M
       const task = (await page.evaluate(() => window.downloader.snapshot())).tasks[index]!;
       expect(task.options.selection).toEqual({ video: 'v2160', audio: 'flac' });
       expect(task.options.mergeFormat).toBe(container);
+      expect(task.options.embedChapters).toBe(index !== 1);
+      expect(task.options.subtitles).toEqual([
+        { language: 'en', source: 'manual' }, { language: 'zh-Hans', source: 'manual' }, { language: 'en', source: 'automatic' }
+      ]);
     }
     await page.locator('#urls').fill('https://youtube.com/watch?v=muxed-only');
     await page.locator('#download').click();
     await expect(page.locator('#format-error')).toContainText('当前版本不提供合一流下载');
     await expect(page.locator('#confirm-formats')).toBeDisabled();
     await page.locator('#cancel-formats').click();
+    await page.locator('#urls').fill('https://youtube.com/watch?v=audio-subtitle-check');
+    await page.locator('#download').click();
+    await expect(page.locator('#format-content')).toBeVisible();
+    await page.locator('#subtitle-tracks input[data-source="automatic"]').check();
+    await page.locator('#stream-mode').selectOption('audio');
+    await expect(page.locator('#subtitle-control')).toBeHidden();
+    await page.locator('#audio-table input[value="a1"]').check();
+    await page.locator('#confirm-formats').click();
+    const audio = (await page.evaluate(() => window.downloader.snapshot())).tasks.at(-1)!;
+    expect(audio.options.subtitles).toEqual([]);
+    expect(audio.options.embedChapters).toBe(true);
+    await expect(page.locator('.badge')).toHaveText(Array(4).fill('已完成'));
   } finally { await desktop.close(); await rm(root, { recursive: true, force: true }); }
 });
 

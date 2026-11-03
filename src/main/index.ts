@@ -41,7 +41,7 @@ else {
   });
 }
 function snapshot(): Snapshot {
-  return { settings: store.state.settings, tasks: store.state.tasks, cookies: cookies.info, playlist: engine.playlist, update: updates.info, warning: store.warning, proxyConfigured: !!store.state.proxyEncrypted, inspection: formats.info };
+  return { settings: store.state.settings, tasks: store.state.tasks, cookies: cookies.info, playlist: engine.playlist, update: updates.info, warning: store.warning, proxyConfigured: !!store.state.proxyEncrypted, inspection: formats.info, preparations: engine.preparations };
 }
 function changed(): void {
   if (!notification) notification = setTimeout(() => {
@@ -71,7 +71,7 @@ async function start(): Promise<void> {
   if (!testing) for (const filename of Object.values(bundled)) if (!(await stat(filename)).isFile()) throw new Error(`内置工具缺失：${path.basename(filename)}。开发模式请先运行 npm run prepare:tools。`);
   const key = app.isPackaged ? path.join(process.resourcesPath, 'public.key') : path.join(app.getAppPath(), 'resources/public.key');
   const launch: typeof run = testing
-    ? (_executable, args, onLine, cwd) => run(bundled.node, [path.join(app.getAppPath(), 'tests/fixtures/engine.cjs'), ...args], onLine, cwd)
+    ? (_executable, args, onLine, cwd, input) => run(bundled.node, [path.join(app.getAppPath(), 'tests/fixtures/engine.cjs'), ...args], onLine, cwd, input)
     : run;
   cookies = new Cookies(store, () => updates.yt(), changed, launch);
   engine = new Engine(store, tools, cookies, proxy, changed, launch);
@@ -177,7 +177,7 @@ function registerApi(): void {
   });
   handle('clearCookies', async () => cookies.clear());
   handle('authorizeChrome', async profile => {
-    const consent = await dialog.showMessageBox(win!, { type: 'warning', buttons: ['取消', '授权读取'], defaultId: 0, cancelId: 0, message: '允许读取选定 Chrome 配置的 Cookie？', detail: 'yt-dlp 会读取浏览器登录凭据，程序只保留目标平台 Cookie 的临时副本，不上传、不记录其内容。macOS 可能请求钥匙串权限，Windows 加密可能阻止读取；失败请手动导入。' });
+    const consent = await dialog.showMessageBox(win!, { type: 'warning', buttons: ['取消', '授权读取'], defaultId: 0, cancelId: 0, message: '允许读取并缓存选定 Chrome 配置的 Cookie？', detail: 'yt-dlp 会读取浏览器登录凭据。程序将目标平台 Cookie 保存在本机私密缓存，文件不加密、不上传、不记录内容，可跨重启复用；会话 Cookie 最长缓存 6 小时。到期或明确登录失效时重新读取，每次操作最多自动重试一次。切换配置或撤销授权会清除缓存。macOS 可能请求钥匙串权限，Windows 加密可能阻止读取；失败请手动导入。' });
     if (consent.response === 1) await cookies.authorize(text(profile));
   });
   handle('revokeChrome', async () => cookies.revoke());
@@ -211,8 +211,9 @@ function registerApi(): void {
   handle('cancelInspection', async () => formats.cancel());
   handle('enqueueFormats', async input => {
     if (!input || stopping) throw new Error('格式确认参数无效或程序正在退出。');
-    const selected = formats.selection(text(input.inspection), input.selection);
-    return engine.enqueue([selected.url], options({ kind: 'video', container: 'original', height: 0, cookie: selected.cookie, selection: selected.selection, ...(input.mergeFormat !== undefined ? { mergeFormat: input.mergeFormat } : {}) }));
+    const selected = formats.selection(text(input.inspection), input.selection, input.subtitles);
+    return engine.enqueue([selected.url], options({ kind: 'video', container: 'original', height: 0, cookie: selected.cookie, selection: selected.selection,
+      embedChapters: input.embedChapters === undefined ? true : input.embedChapters, subtitles: selected.subtitles, ...(input.mergeFormat !== undefined ? { mergeFormat: input.mergeFormat } : {}) }), selected.source);
   });
   handle('cancel', async id => engine.cancel(text(id)));
   handle('retry', async id => engine.retry(text(id)));
