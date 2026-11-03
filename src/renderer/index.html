@@ -35,13 +35,14 @@
       <div id="format-content" hidden>
         <p class="muted">编码与容器是两回事。“通常有损”根据编码类型推断，无法确认具体编码模式时不保证；无损编码也不代表上传前的母带无损。原样保存不增加转码损失，也无法恢复源文件已经丢失的信息。未知参数不会猜测。</p>
         <div class="format-filters">
-          <label class="mode-label">保存方式<select id="stream-mode"><option value="separate">独立视频 + 独立音频</option><option value="combined">音视频合一流</option><option value="video">仅视频（无声音）</option><option value="audio">仅音频（源格式）</option></select></label>
+          <label class="mode-label">保存方式<select id="stream-mode"><option value="separate">音视频下载后合并</option><option value="video">仅视频（无声音）</option><option value="audio">仅音频（源格式）</option></select></label>
+          <label id="merge-control" class="mode-label">合并格式<select id="merge-format"><option value="mkv">MKV（推荐，兼容更多编码）</option><option value="mov">MOV</option><option value="mp4">MP4</option></select></label>
           <label id="resolution-control" class="mode-label">视频分辨率<select id="resolution"><option value="all">全部分辨率</option></select></label>
         </div>
         <p id="resolution-hint" class="muted">仅列出当前保存方式实际可用的分辨率，不放大、不转码。筛选后仍需选择具体编码格式；切换分辨率不会自动改选其他流。</p>
+        <div id="merge-help"><div class="actions"><button id="best-streams">最佳视频＋最佳音频</button></div><p class="muted">快捷项按 yt-dlp 对当前视频的质量排序选择最佳独立视频和音频（不按文件大小），会清除分辨率筛选；确认后才下载。仅复制原编码合并，MOV/MP4 不兼容时会报错，建议改选 MKV，不自动转码。</p></div>
         <div id="video-formats" class="format-group"><h3>视频流</h3><div id="video-table"></div></div>
         <div id="audio-formats" class="format-group"><h3>音频流</h3><div id="audio-table"></div></div>
-        <div id="combined-formats" class="format-group"><h3>音视频合一流</h3><div id="combined-table"></div></div>
         <p id="format-summary" class="selection-summary" aria-live="polite"></p>
       </div>
       <div class="actions"><button id="confirm-formats" class="primary" disabled>确认格式并加入队列</button><button id="retry-formats">重新解析</button><button id="skip-formats">跳过此视频</button></div>
@@ -64,8 +65,8 @@
         <div class="settings-grid">
           <div><h3>下载设置</h3><label>保存目录<div class="input-row"><input id="directory" readonly><button id="choose-directory">选择</button></div></label>
             <label>同时下载数（1–5）<input id="concurrency" type="number" min="1" max="5" value="3"></label>
-            <label>代理地址<input id="proxy" type="password" autocomplete="off" placeholder="留空不更改；支持 HTTP / SOCKS"></label>
-            <label class="check"><input id="clear-proxy" type="checkbox"> 删除已保存代理</label>
+            <label>手动代理（覆盖系统代理）<input id="proxy" type="password" autocomplete="off" placeholder="未设置时跟随系统；留空保留现有设置"></label>
+            <label class="check"><input id="clear-proxy" type="checkbox"> 删除手动代理，恢复跟随系统</label>
             <p id="proxy-state" class="muted"></p>
             <label class="check"><input id="auto-update" type="checkbox" checked> 启动时检查 yt-dlp 更新（不自动安装）</label>
             <button id="save-settings" class="primary">保存设置</button>

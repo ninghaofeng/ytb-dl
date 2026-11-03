@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, safeStorage, session, shell } from 'electron';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Store } from './store';
@@ -10,6 +10,7 @@ import { settings, proxyUrl, options, errorMessage } from './validation';
 import type { Api, CookieMode, Settings, Snapshot } from '../shared/types';
 import type { Tools } from './arguments';
 import { run } from './process';
+import { resolveApplicationProxy } from './proxy';
 
 let win: BrowserWindow | undefined;
 let quitting = false;
@@ -40,7 +41,7 @@ else {
   });
 }
 function snapshot(): Snapshot {
-  return { settings: store.state.settings, tasks: store.state.tasks, cookies: cookies.info, playlist: engine.playlist, update: updates.info, warning: store.warning, proxyConfigured: !!store.state.proxyEncrypted };
+  return { settings: store.state.settings, tasks: store.state.tasks, cookies: cookies.info, playlist: engine.playlist, update: updates.info, warning: store.warning, proxyConfigured: !!store.state.proxyEncrypted, inspection: formats.info };
 }
 function changed(): void {
   if (!notification) notification = setTimeout(() => {
@@ -49,10 +50,13 @@ function changed(): void {
     updates?.tick();
   }, 150);
 }
-function proxy(): string {
+function manualProxy(): string {
   if (!store.state.proxyEncrypted) return '';
   if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储不可用，无法读取代理凭据。');
   return safeStorage.decryptString(Buffer.from(store.state.proxyEncrypted, 'base64'));
+}
+function proxy(url: string): Promise<string> {
+  return resolveApplicationProxy(url, manualProxy, value => session.defaultSession.resolveProxy(value));
 }
 function tools(): Tools {
   const base = app.isPackaged ? path.join(process.resourcesPath, 'tools') : path.join(app.getAppPath(), 'resources', `${process.platform === 'darwin' ? 'mac' : 'win'}-${process.arch}`);
@@ -208,7 +212,7 @@ function registerApi(): void {
   handle('enqueueFormats', async input => {
     if (!input || stopping) throw new Error('格式确认参数无效或程序正在退出。');
     const selected = formats.selection(text(input.inspection), input.selection);
-    return engine.enqueue([selected.url], { kind: 'video', container: 'original', height: 0, cookie: selected.cookie, selection: selected.selection });
+    return engine.enqueue([selected.url], options({ kind: 'video', container: 'original', height: 0, cookie: selected.cookie, selection: selected.selection, ...(input.mergeFormat !== undefined ? { mergeFormat: input.mergeFormat } : {}) }));
   });
   handle('cancel', async id => engine.cancel(text(id)));
   handle('retry', async id => engine.retry(text(id)));
@@ -224,7 +228,10 @@ function registerApi(): void {
     if (!t.file || !(await stat(t.file)).isFile()) throw new Error('文件尚未生成或已被移动。');
     shell.showItemInFolder(t.file);
   });
-  handle('checkUpdate', async () => updates.check());
+  handle('checkUpdate', async () => {
+    await updates.check();
+    if (store.warning.startsWith('更新检查失败：')) { store.warning = ''; changed(); }
+  });
   handle('installUpdate', async () => updates.install());
   handle('rollback', async () => updates.rollback());
 }

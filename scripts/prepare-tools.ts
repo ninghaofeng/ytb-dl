@@ -2,7 +2,7 @@ import { chmod, copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:f
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readKeys } from 'openpgp';
-import { download as fetchResource } from '../src/main/network';
+import { downloadResource } from './resource-download';
 import { assetName, BUNDLED_YT_VERSION, KEY_FINGERPRINT, verifyChecksum, verifyManifest } from '../src/main/updates';
 import { run } from '../src/main/process';
 
@@ -13,7 +13,7 @@ const root = path.resolve('resources', `${platform}-${arch}`);
 const temporary = path.join(root, `prepare-${randomUUID()}`);
 const suffix = platform === 'win' ? '.exe' : '';
 const buildProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || '';
-const download = (url: string, _proxy = '', maxBytes?: number): Promise<Buffer> => fetchResource(url, buildProxy, maxBytes);
+const download = (url: string, _proxy = '', maxBytes?: number): Promise<Buffer> => downloadResource(url, buildProxy, maxBytes);
 const records: { file: string; sha256: string; source: string }[] = [];
 const hash = (buffer: Buffer): string => createHash('sha256').update(buffer).digest('hex');
 async function save(filename: string, data: Buffer, source: string): Promise<void> {

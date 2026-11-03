@@ -1,4 +1,4 @@
-import type { Compression, CookieMode, FormatInspection, Snapshot, SourceFormat, StreamSelection, TaskStatus } from '../shared/types';
+import type { Compression, CookieMode, FormatInspection, MergeFormat, Snapshot, SourceFormat, StreamSelection, TaskStatus } from '../shared/types';
 
 const api = window.downloader;
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -41,13 +41,14 @@ function action(label: string, work: () => Promise<unknown>): HTMLButtonElement 
 }
 function render(s: Snapshot, initial = false): void {
   state = s;
+  inspectionProgress();
   el('warning').hidden = !s.warning; el('warning').textContent = s.warning;
   if (initial) {
     input('directory').value = s.settings.directory;
     input('concurrency').value = String(s.settings.concurrency);
     input('auto-update').checked = s.settings.checkUpdates;
   }
-  el('proxy-state').textContent = s.proxyConfigured ? '已保存代理（凭据使用系统安全存储）。留空不更改。' : '未配置代理，请确保网络可访问目标站点。';
+  el('proxy-state').textContent = s.proxyConfigured ? '正在使用手动代理（凭据使用系统安全存储）。留空不更改；删除后跟随系统代理。' : '默认跟随系统代理；系统未配置代理或规则指定直连时直接连接。';
   const c = s.cookies;
   el('file-state').textContent = c.fileError || `${c.file ? '已导入' : '未导入'} · ${c.watching ? '正在监测原始文件' : '未监测'}${c.lastFileSync ? ` · 同步于 ${new Date(c.lastFileSync).toLocaleString()}` : ''}`;
   el('chrome-state').textContent = c.chromeError || `${c.chromeAuthorized ? `已授权 ${c.chromeProfile}` : '未授权'}${c.lastChromeSync ? ` · 同步于 ${new Date(c.lastChromeSync).toLocaleString()}` : ''}`;
@@ -83,7 +84,7 @@ function renderTasks(): void {
     head.append(text('div', task.title, 'task-title'), badge);
     const progress = document.createElement('progress'); progress.max = 100; progress.value = task.progress; progress.setAttribute('aria-label', '下载进度');
     row.append(head, progress, text('p', `${task.progress.toFixed(1)}% · ${task.speed || '—'} · 预计 ${task.eta || '—'}`, 'muted'), text('p', task.file || task.directory, 'muted'));
-    if (task.options.selection) row.append(text('p', selectionLabel(task.options.selection), 'muted'));
+    if (task.options.selection) row.append(text('p', selectionLabel(task.options.selection, task.options.mergeFormat), 'muted'));
     if (task.error) row.append(text('p', task.error, 'warning'));
     const buttons = text('div', '', 'actions');
     if (['queued', 'syncing', 'downloading', 'processing'].includes(task.status)) buttons.append(action('取消', () => api.cancel(task.id)));
@@ -114,15 +115,25 @@ async function renderEntries(): Promise<void> {
 let formatBatch: { urls: string[]; cookie: CookieMode; index: number; added: number; duplicates: number } | undefined;
 let inspection: FormatInspection | undefined;
 let formatLoading = false, formatSubmitting = false, formatClosing = false;
-function selectionLabel(s: StreamSelection): string {
+function inspectionProgress(): void {
+  if (!formatLoading || !state?.inspection) return;
+  const { stage, startedAt, timeoutMs } = state.inspection;
+  const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const labels = {
+    cookies: '正在同步 Cookie。Chrome 自动读取可能需要确认系统钥匙串授权弹窗。',
+    proxy: '正在解析系统/手动代理。请确认代理或 PAC 服务可用。',
+    metadata: '正在连接平台并读取视频格式。可能正在等待网络、登录或人机验证响应。'
+  };
+  el('format-loading').textContent = `${labels[stage]} 此阶段已等待 ${elapsed} 秒，上限 ${Math.ceil(timeoutMs / 1000)} 秒；尚未下载媒体，可点击“结束选择”。`;
+}
+function selectionLabel(s: StreamSelection, mergeFormat: MergeFormat = 'mkv'): string {
   if (s.combined) return `音视频合一流 #${s.combined} · 原容器，不重新编码`;
   return [s.video ? `视频 #${s.video}` : '', s.audio ? `音频 #${s.audio}` : ''].filter(Boolean).join(' + ') +
-    (s.video && s.audio ? ' · 合并为 MKV，不重新编码' : ' · 保留源格式，不重新编码');
+    (s.video && s.audio ? ` · 合并为 ${mergeFormat.toUpperCase()}，不重新编码` : ' · 保留源格式，不重新编码');
 }
 function chosenStreams(): StreamSelection {
   const chosen = (type: string): string | undefined => el('format-content').querySelector<HTMLInputElement>(`input[name="source-${type}"]:checked`)?.value;
   const mode = select('stream-mode').value;
-  if (mode === 'combined') return chosen('combined') ? { combined: chosen('combined') } : {};
   return { ...(['separate', 'video'].includes(mode) && chosen('video') ? { video: chosen('video') } : {}), ...(['separate', 'audio'].includes(mode) && chosen('audio') ? { audio: chosen('audio') } : {}) };
 }
 function resolutionKey(format: SourceFormat): string { return `${format.width ?? '?'}x${format.height ?? '?'}`; }
@@ -138,9 +149,8 @@ function resolutionLabel(format: SourceFormat): string {
 }
 function resolutionOptions(reset = false): void {
   const list = select('resolution'), previous = reset ? 'all' : list.value;
-  const type = select('stream-mode').value === 'combined' ? 'combined' : 'video';
   const choices = new Map<string, SourceFormat>();
-  for (const format of inspection?.formats || []) if (format.type === type) choices.set(resolutionKey(format), format);
+  for (const format of inspection?.formats || []) if (format.type === 'video') choices.set(resolutionKey(format), format);
   list.replaceChildren();
   const all = document.createElement('option'); all.value = 'all'; all.textContent = '全部分辨率'; list.append(all);
   const area = (f: SourceFormat): number => (f.height || 0) * (f.width || f.height || 0);
@@ -150,7 +160,7 @@ function resolutionOptions(reset = false): void {
   list.value = choices.has(previous) ? previous : 'all';
 }
 function filterResolution(): void {
-  for (const type of ['video', 'combined'] as const) {
+  for (const type of ['video'] as const) {
     const host = el(`${type}-table`);
     const previous = host.querySelector<HTMLInputElement>('input:checked')?.value;
     const formats = inspection?.formats.filter(f => f.type === type && (select('resolution').value === 'all' || resolutionKey(f) === select('resolution').value)) || [];
@@ -168,20 +178,23 @@ function pickerControls(): void {
   const mode = select('stream-mode').value;
   el('video-formats').hidden = !['separate', 'video'].includes(mode);
   el('audio-formats').hidden = !['separate', 'audio'].includes(mode);
-  el('combined-formats').hidden = mode !== 'combined';
+  el('merge-control').hidden = mode !== 'separate';
+  el('merge-help').hidden = mode !== 'separate';
   const s = chosenStreams();
-  const valid = mode === 'separate' ? s.video && s.audio : mode === 'combined' ? s.combined : mode === 'video' ? s.video : s.audio;
+  const valid = mode === 'separate' ? s.video && s.audio : mode === 'video' ? s.video : s.audio;
   el<HTMLButtonElement>('confirm-formats').disabled = !inspection || !valid || formatLoading || formatSubmitting || formatClosing;
   el<HTMLButtonElement>('retry-formats').disabled = formatLoading || formatSubmitting || formatClosing;
   el<HTMLButtonElement>('skip-formats').disabled = formatLoading || formatSubmitting || formatClosing;
   el<HTMLButtonElement>('cancel-formats').disabled = formatSubmitting || formatClosing;
   select('stream-mode').disabled = formatSubmitting;
+  select('merge-format').disabled = formatSubmitting || formatLoading || formatClosing;
+  el<HTMLButtonElement>('best-streams').disabled = !inspection?.best.video || !inspection.best.audio || formatLoading || formatSubmitting || formatClosing;
   el('resolution-control').hidden = mode === 'audio';
   el('resolution-hint').hidden = mode === 'audio';
   select('resolution').disabled = !inspection || formatLoading || formatSubmitting || formatClosing;
   for (const radio of Array.from(el('format-content').querySelectorAll<HTMLInputElement>('input'))) radio.disabled = formatSubmitting;
-  const video = inspection?.formats.find(f => f.id === (s.video || s.combined));
-  el('format-summary').textContent = valid ? `${video ? `${resolutionLabel(video)} · ` : ''}${selectionLabel(s)}` : '请明确选择分辨率和具体格式；不会自动替你选择或降级到其他编码。';
+  const video = inspection?.formats.find(f => f.id === s.video);
+  el('format-summary').textContent = valid ? `${video ? `${resolutionLabel(video)} · ` : ''}${selectionLabel(s, select('merge-format').value as MergeFormat)}` : '请明确选择分辨率和具体格式；不会自动替你选择或降级到其他编码。';
 }
 function codecLabel(codec: string, value: Compression): string {
   if (codec === 'none') return '无';
@@ -189,11 +202,11 @@ function codecLabel(codec: string, value: Compression): string {
   return `${codec} · ${{ lossy: '通常有损（编码推断）', lossless: '无损编码', unknown: '压缩属性未知' }[value]}`;
 }
 function numberLabel(value: number | null, unit: string): string { return value === null ? '未知' : `${Number(value.toFixed(2))}${unit}`; }
-function renderFormatTable(type: SourceFormat['type'], formats: SourceFormat[]): void {
+function renderFormatTable(type: 'video' | 'audio', formats: SourceFormat[]): void {
   const host = el(`${type}-table`); host.replaceChildren();
   if (!formats.length) { host.append(text('p', '当前分辨率下未提供此类可下载流。', 'muted')); return; }
   const scroll = text('div', '', 'format-scroll'); scroll.tabIndex = 0;
-  scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', `${{ video: '视频', audio: '音频', combined: '音视频合一' }[type]}格式列表，可横向滚动`);
+  scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', `${{ video: '视频', audio: '音频' }[type]}格式列表，可横向滚动`);
   const table = document.createElement('table'); table.className = 'format-table';
   table.append(text('caption', `${type} 可用源格式`));
   const header = document.createElement('thead'), headings = document.createElement('tr');
@@ -226,7 +239,9 @@ async function loadFormats(): Promise<void> {
   const batch = formatBatch;
   if (!batch) return;
   inspection = undefined; formatLoading = true;
-  for (const type of ['video', 'audio', 'combined']) el(`${type}-table`).replaceChildren();
+  el('format-loading').textContent = '正在准备格式解析，尚未开始下载。';
+  const progressTimer = setInterval(inspectionProgress, 1000);
+  for (const type of ['video', 'audio']) el(`${type}-table`).replaceChildren();
   el('format-content').hidden = true; el('format-error').hidden = true; el('format-loading').hidden = false;
   el('format-position').textContent = `${batch.index + 1} / ${batch.urls.length}`;
   el('format-title').textContent = '正在解析视频';
@@ -240,7 +255,9 @@ async function loadFormats(): Promise<void> {
     renderFormatTable('audio', result.formats.filter(f => f.type === 'audio'));
     const has = (type: SourceFormat['type']): boolean => result.formats.some(f => f.type === type);
     for (const option of Array.from(select('stream-mode').options)) option.disabled = option.value === 'separate' ? !has('video') || !has('audio') : !has(option.value as SourceFormat['type']);
-    select('stream-mode').value = has('video') && has('audio') ? 'separate' : has('combined') ? 'combined' : has('video') ? 'video' : 'audio';
+    select('stream-mode').value = has('video') && has('audio') ? 'separate' : has('video') ? 'video' : 'audio';
+    if (!has('video') && !has('audio')) throw new Error('平台仅提供音视频合一流，没有可独立选择的视频/音频。当前版本不提供合一流下载。');
+    select('merge-format').value = 'mkv';
     resolutionOptions(true);
     filterResolution();
     el('format-content').hidden = false;
@@ -250,6 +267,7 @@ async function loadFormats(): Promise<void> {
     el('format-error').textContent = message; el('format-error').hidden = false;
     el('format-title').textContent = '格式解析失败'; notice(message, true);
   } finally {
+    clearInterval(progressTimer);
     if (formatBatch === batch) {
       formatLoading = false; el('format-loading').hidden = true; pickerControls();
     }
@@ -277,12 +295,22 @@ async function nextFormat(): Promise<void> {
 }
 select('stream-mode').onchange = () => { resolutionOptions(); filterResolution(); };
 select('resolution').onchange = filterResolution;
+select('merge-format').onchange = pickerControls;
+bind('best-streams', async () => {
+  if (!inspection?.best.video || !inspection.best.audio) throw new Error('当前视频没有可合并的独立视频和独立音频。');
+  select('stream-mode').value = 'separate';
+  select('resolution').value = 'all'; filterResolution();
+  for (const type of ['video', 'audio'] as const) {
+    for (const radio of Array.from(el(`${type}-table`).querySelectorAll<HTMLInputElement>('input'))) radio.checked = radio.value === inspection.best[type];
+  }
+  pickerControls();
+});
 el('confirm-formats').addEventListener('click', () => {
   if (!inspection || formatSubmitting || formatLoading) return;
   formatSubmitting = true; pickerControls();
   void (async () => {
     try {
-      const result = await api.enqueueFormats({ inspection: inspection!.id, selection: chosenStreams() });
+      const result = await api.enqueueFormats({ inspection: inspection!.id, selection: chosenStreams(), ...(select('stream-mode').value === 'separate' ? { mergeFormat: select('merge-format').value as MergeFormat } : {}) });
       if (formatBatch) { formatBatch.added += result.added; formatBatch.duplicates += result.duplicates; }
       await nextFormat();
     } catch (error) { notice(error instanceof Error ? error.message : String(error), true); }

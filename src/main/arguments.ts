@@ -5,12 +5,12 @@ import { streamSelection } from './validation';
 export interface Tools { yt: string; ffmpeg: string; ffprobe: string; node: string }
 export function commonArgs(tools: Tools, proxy: string, cookies: string): string[] {
   return ['--ignore-config', '--no-plugin-dirs', '--no-colors', '--encoding', 'utf-8', '--js-runtimes', `node:${tools.node}`, '--ffmpeg-location', path.dirname(tools.ffmpeg),
-    '--socket-timeout', '30', '--retries', '3', ...(proxy ? ['--proxy', proxy] : []), ...(cookies ? ['--cookies', cookies] : [])];
+    '--socket-timeout', '30', '--retries', '3', '--proxy', proxy, ...(cookies ? ['--cookies', cookies] : [])];
 }
 export function formatArgs(o: DownloadOptions): string[] {
   if (o.selection) {
     const s = streamSelection(o.selection);
-    return ['-f', s.combined || [s.video, s.audio].filter(Boolean).join('+'), ...(s.video && s.audio ? ['--merge-output-format', 'mkv'] : [])];
+    return ['-f', s.combined || [s.video, s.audio].filter(Boolean).join('+'), ...(s.video && s.audio ? ['--merge-output-format', o.mergeFormat || 'mkv'] : [])];
   }
   if (o.kind === 'mp3') return ['-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', '0'];
   const height = o.height ? `[height<=${o.height}]` : '';

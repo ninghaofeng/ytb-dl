@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { Compression, CookieMode, FormatInspection, SourceFormat, StreamSelection } from '../shared/types';
+import type { Compression, CookieMode, FormatInspection, InspectionProgress, SourceFormat, StreamSelection } from '../shared/types';
 import { commonArgs, type Tools } from './arguments';
 import { formatId, streamSelection, videoUrl } from './validation';
 import type { Cookies } from './cookies';
 import { run, type Running } from './process';
+import type { ProxyResolver } from './proxy';
 
 export function compression(codec: string): Compression {
   if (/^(flac|alac|pcm(?:_|$)|ffv1|huffyuv|utvideo|rawvideo)/i.test(codec)) return 'lossless';
@@ -17,7 +18,7 @@ function positive(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 function label(value: unknown): string { return typeof value === 'string' ? value.slice(0, 500) : ''; }
-export function sourceFormats(value: unknown): { title: string; formats: SourceFormat[] } {
+export function sourceFormats(value: unknown): { title: string; formats: SourceFormat[]; best: StreamSelection } {
   const raw = record(value);
   if (!raw || typeof raw.title !== 'string' || raw._type === 'playlist' || raw.entries) throw new Error('未返回单视频格式，请先解析播放列表并选择条目。');
   const rows: unknown[] = Array.isArray(raw.formats) ? raw.formats : [raw];
@@ -43,24 +44,53 @@ export function sourceFormats(value: unknown): { title: string; formats: SourceF
     });
   }
   if (!formats.length) throw new Error('没有可选择的非 DRM 音视频格式；可能需要登录、更新引擎，或此视频只有不可识别的格式。');
-  return { title: raw.title.slice(0, 1000), formats };
+  // yt-dlp orders formats from worst to best using its extractor-specific quality rules.
+  const ranked = [...formats].reverse();
+  const video = ranked.find(f => f.type === 'video'), audio = ranked.find(f => f.type === 'audio');
+  return { title: raw.title.slice(0, 1000), formats, best: { ...(video ? { video: video.id } : {}), ...(audio ? { audio: audio.id } : {}) } };
 }
 export function validateSelection(formats: SourceFormat[], value: unknown): StreamSelection {
   const selection = streamSelection(value);
+  if (selection.combined) throw new Error('不再提供音视频合一流下载，请分别选择视频和音频后合并。');
   for (const type of ['video', 'audio', 'combined'] as const) {
     if (selection[type] && !formats.some(f => f.id === selection[type] && f.type === type)) throw new Error('所选格式不属于当前视频或流类型不匹配，请重新解析。');
   }
   return selection;
 }
 export class Formats {
+  info: InspectionProgress | null = null;
   private work?: Promise<FormatInspection>;
   private process?: Running;
   private owner = '';
   private cancelled = false;
-  private cookiePending = false;
+  private interrupt?: (error: Error) => void;
   private current?: { result: FormatInspection; cookie: CookieMode };
   get busy(): boolean { return !!this.work; }
-  constructor(private tools: () => Tools, private cookies: Cookies, private proxy: () => string, private changed: () => void, private blocked: () => boolean, private launch: typeof run = run) {}
+  constructor(private tools: () => Tools, private cookies: Cookies, private proxy: ProxyResolver, private changed: () => void, private blocked: () => boolean, private launch: typeof run = run, private limits = { cookies: 120_000, proxy: 20_000, metadata: 120_000 }) {}
+  private async stage<T>(stage: InspectionProgress['stage'], operation: () => Promise<T>, stop?: (pending: Promise<T>) => Promise<void>): Promise<T> {
+    const messages = {
+      cookies: '同步 Cookie 超时。请检查 Chrome 钥匙串授权弹窗；可改用导出的 cookies.txt。不会自动改为无 Cookie。',
+      proxy: '系统代理解析超时。请检查系统代理/PAC，或在设置中手动指定代理。',
+      metadata: '读取平台格式超时。请检查代理是否可访问 YouTube/目标平台，以及登录或人机验证状态。'
+    };
+    const timeoutMs = this.limits[stage];
+    this.info = { stage, startedAt: Date.now(), timeoutMs }; this.changed();
+    let timer: NodeJS.Timeout | undefined;
+    const interrupted = new Promise<never>((_, reject) => {
+      this.interrupt = reject;
+      timer = setTimeout(() => reject(new Error(messages[stage])), timeoutMs);
+    });
+    const pending = Promise.resolve().then(operation);
+    try { return await Promise.race([pending, interrupted]); }
+    catch (error) {
+      if (stop) await stop(pending);
+      if (stage === 'metadata' && error instanceof Error && error.message === messages.metadata) {
+        const detail = this.process?.diagnostics();
+        if (detail) throw new Error(`${error.message}\n引擎诊断：${detail}`);
+      }
+      throw error;
+    } finally { clearTimeout(timer); this.interrupt = undefined; }
+  }
   inspect(url: string, cookie: CookieMode): Promise<FormatInspection> {
     if (this.busy || this.blocked()) throw new Error('正在解析、退出或安装更新，请稍后再试。');
     const validated = videoUrl(url);
@@ -75,17 +105,23 @@ export class Formats {
   private async inspectRun(url: string, mode: CookieMode): Promise<FormatInspection> {
     let cookie = '';
     try {
-      this.cookiePending = mode !== 'none';
-      try { cookie = await this.cookies.snapshot(mode, this.owner); }
-      finally { this.cookiePending = false; }
+      cookie = await this.stage('cookies', () => this.cookies.snapshot(mode, this.owner), async pending => {
+        if (mode !== 'none') await this.cookies.cancelSnapshot(this.owner);
+        const late = await pending.catch(() => '');
+        await this.cookies.removeSnapshot(late);
+      });
+      if (this.cancelled) throw new Error('已取消格式解析。');
+      const proxy = await this.stage('proxy', async () => this.proxy(url));
       if (this.cancelled) throw new Error('已取消格式解析。');
       let metadata: ReturnType<typeof sourceFormats> | undefined;
-      this.process = this.launch(this.tools().yt, [...commonArgs(this.tools(), this.proxy(), cookie), '--no-playlist', '--skip-download', '--dump-json', '--', url], line => {
+      await this.stage('metadata', async () => {
+        this.process = this.launch(this.tools().yt, [...commonArgs(this.tools(), proxy, cookie), '--no-playlist', '--skip-download', '--dump-json', '--', url], line => {
         if (!line.startsWith('{')) return;
         if (metadata) throw new Error('格式解析意外返回多个视频，请先解析播放列表。');
         metadata = sourceFormats(JSON.parse(line));
-      });
-      await this.process.done;
+        });
+        await this.process.done;
+      }, async () => { await this.process?.stop(); });
       if (this.cancelled) throw new Error('已取消格式解析。');
       if (!metadata) throw new Error('引擎未返回视频格式。');
       const result = { id: this.owner, url, ...metadata };
@@ -95,7 +131,7 @@ export class Formats {
       try { await this.cookies.removeSnapshot(cookie); }
       catch (error) { this.current = undefined; throw error; }
       finally {
-        this.process = undefined; this.work = undefined; this.changed();
+        this.process = undefined; this.work = undefined; this.info = null; this.changed();
       }
     }
   }
@@ -105,8 +141,7 @@ export class Formats {
   }
   async cancel(): Promise<void> {
     this.cancelled = true; this.current = undefined;
-    if (this.process) await this.process.stop();
-    else if (this.cookiePending) await this.cookies.cancelSnapshot(this.owner);
+    this.interrupt?.(new Error('已取消格式解析。'));
     // The caller of inspect receives the original extraction or cancellation error.
     await this.work?.catch(() => {});
   }

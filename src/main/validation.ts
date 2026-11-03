@@ -22,7 +22,9 @@ export function options(value: unknown): DownloadOptions {
   }
   const selection = v.selection === undefined ? undefined : streamSelection(v.selection);
   if (selection && (v.kind !== 'video' || v.container !== 'original' || v.height !== 0)) throw new Error('精确格式选择不能与 MP3 转码、画质上限或预设容器混用。');
-  return { kind: v.kind as DownloadOptions['kind'], container: v.container as DownloadOptions['container'], height: v.height, cookie: v.cookie as DownloadOptions['cookie'], ...(selection ? { selection } : {}) };
+  if (v.mergeFormat !== undefined && (!['mkv', 'mov', 'mp4'].includes(String(v.mergeFormat)) ||
+      typeof v.mergeFormat !== 'string' || !selection?.video || !selection.audio)) throw new Error('合并格式必须是 MKV、MOV 或 MP4，且须分别选择视频和音频。');
+  return { kind: v.kind as DownloadOptions['kind'], container: v.container as DownloadOptions['container'], height: v.height, cookie: v.cookie as DownloadOptions['cookie'], ...(selection ? { selection } : {}), ...(v.mergeFormat !== undefined ? { mergeFormat: v.mergeFormat as DownloadOptions['mergeFormat'] } : {}) };
 }
 export function formatId(value: unknown): value is string {
   return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(value);

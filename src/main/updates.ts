@@ -7,6 +7,7 @@ import type { UpdateInfo } from '../shared/types';
 import { download } from './network';
 import { run } from './process';
 import { errorMessage } from './validation';
+import type { ProxyResolver } from './proxy';
 
 export const KEY_FINGERPRINT = 'ac0cbbe6848d6a873464af4e57cf65933b5a7581';
 export const BUNDLED_YT_VERSION = '2026.10.26';
@@ -37,7 +38,7 @@ export class Updates {
   private checking?: Promise<void>;
   private operation?: Promise<void>;
   private root: string;
-  constructor(private store: Store, private bundled: string, private key: string, private proxy: () => string, private busy: () => boolean, private pause: (paused: boolean) => void, private changed: () => void, private fetchResource: typeof download = download) {
+  constructor(private store: Store, private bundled: string, private key: string, private proxy: ProxyResolver, private busy: () => boolean, private pause: (paused: boolean) => void, private changed: () => void, private fetchResource: typeof download = download) {
     this.root = path.join(store.root, 'engines');
     this.info = { current: store.state.engine || BUNDLED_YT_VERSION, latest: '', previous: store.state.previousEngine, status: 'idle', error: '' };
   }
@@ -75,7 +76,7 @@ export class Updates {
   private async checkRun(): Promise<void> {
     this.info.status = 'checking'; this.info.error = ''; this.changed();
     try {
-      const raw: unknown = JSON.parse((await this.fetchResource('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest', this.proxy(), 4 * 1024 * 1024)).toString());
+      const raw: unknown = JSON.parse((await this.fetchResource('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest', this.proxy, 4 * 1024 * 1024)).toString());
       if (!raw || typeof raw !== 'object') throw new Error('版本服务返回无效数据。');
       const r = raw as Release;
       if (!/^\d{4}\.\d{2}\.\d{2}(?:\.\d+)?$/.test(r.tag_name) || !Array.isArray(r.assets)) throw new Error('上游版本信息无效。');
@@ -106,9 +107,9 @@ export class Updates {
       const name = assetName(process.platform, process.arch);
       const base = `https://github.com/yt-dlp/yt-dlp/releases/download/${release.tag_name}/`;
       const [manifest, signature, binary, key] = await Promise.all([
-        this.fetchResource(`${base}SHA2-256SUMS`, this.proxy(), 1024 * 1024),
-        this.fetchResource(`${base}SHA2-256SUMS.sig`, this.proxy(), 1024 * 1024),
-        this.fetchResource(`${base}${name}`, this.proxy()),
+        this.fetchResource(`${base}SHA2-256SUMS`, this.proxy, 1024 * 1024),
+        this.fetchResource(`${base}SHA2-256SUMS.sig`, this.proxy, 1024 * 1024),
+        this.fetchResource(`${base}${name}`, this.proxy),
         readFile(this.key, 'utf8')
       ]);
       await verifyManifest(manifest, signature, key);

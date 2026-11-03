@@ -1,6 +1,7 @@
 export type CookieMode = 'none' | 'file' | 'chrome';
 export type TaskStatus = 'queued' | 'syncing' | 'downloading' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 export interface StreamSelection { video?: string; audio?: string; combined?: string }
+export type MergeFormat = 'mkv' | 'mov' | 'mp4';
 export type Compression = 'lossy' | 'lossless' | 'unknown';
 export interface SourceFormat {
   id: string;
@@ -28,6 +29,12 @@ export interface FormatInspection {
   url: string;
   title: string;
   formats: SourceFormat[];
+  best: StreamSelection;
+}
+export interface InspectionProgress {
+  stage: 'cookies' | 'proxy' | 'metadata';
+  startedAt: number;
+  timeoutMs: number;
 }
 export interface DownloadOptions {
   kind: 'video' | 'mp3';
@@ -35,6 +42,7 @@ export interface DownloadOptions {
   height: number;
   cookie: CookieMode;
   selection?: StreamSelection;
+  mergeFormat?: MergeFormat;
 }
 export interface Task {
   id: string;
@@ -90,6 +98,7 @@ export interface Snapshot {
   update: UpdateInfo;
   warning: string;
   proxyConfigured: boolean;
+  inspection: InspectionProgress | null;
 }
 export interface Api {
   snapshot(): Promise<Snapshot>;
@@ -109,7 +118,7 @@ export interface Api {
   selectedPlaylist(input: { ids: string[]; all: boolean }): Promise<PlaylistEntry[]>;
   inspectFormats(input: { url: string; cookie: CookieMode }): Promise<FormatInspection>;
   cancelInspection(): Promise<void>;
-  enqueueFormats(input: { inspection: string; selection: StreamSelection }): Promise<{ added: number; duplicates: number }>;
+  enqueueFormats(input: { inspection: string; selection: StreamSelection; mergeFormat?: MergeFormat }): Promise<{ added: number; duplicates: number }>;
   cancel(id: string): Promise<void>;
   retry(id: string): Promise<void>;
   clearFinished(): Promise<void>;

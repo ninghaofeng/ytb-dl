@@ -11,11 +11,47 @@ function contrast(foreground: string, background: string): number {
       const channel = value / 255;
       return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
     });
+
     return .2126 * linear[0]! + .7152 * linear[1]! + .0722 * linear[2]!;
   }
   const first = luminance(foreground), second = luminance(background);
   return (Math.max(first, second) + .05) / (Math.min(first, second) + .05);
 }
+
+test('best video and audio shortcut requires confirmation and saves the chosen MKV, MOV or MP4 container', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ytbdl-merge-ui-'));
+  const desktop = await _electron.launch({ args: ['.'], env: { ...process.env, YTB_DL_TEST: '1', YTB_DL_TEST_DATA: root } });
+  try {
+    const page = await desktop.firstWindow();
+    for (const [index, container] of ['mkv', 'mov', 'mp4'].entries()) {
+      await page.locator('#urls').fill(`https://youtube.com/watch?v=merge${index}`);
+      await page.locator('#download').click();
+      await expect(page.locator('#format-content')).toBeVisible();
+      await expect(page.locator('#stream-mode')).toHaveValue('separate');
+      await expect(page.locator('#stream-mode')).toContainText('音视频下载后合并');
+      await expect(page.locator('#stream-mode option[value="combined"]')).toHaveCount(0);
+      await expect(page.locator('#merge-format')).toHaveValue('mkv');
+      await page.locator('#resolution').selectOption('1280x720');
+      await page.locator('#best-streams').click();
+      await expect(page.locator('#resolution')).toHaveValue('all');
+      await expect(page.locator('#video-table input[value="v2160"]')).toBeChecked();
+      await expect(page.locator('#audio-table input[value="flac"]')).toBeChecked();
+      await expect(page.locator('#task-count')).toHaveText(String(index));
+      await page.locator('#merge-format').selectOption(container!);
+      await expect(page.locator('#format-summary')).toContainText(`合并为 ${container!.toUpperCase()}`);
+      await page.locator('#confirm-formats').click();
+      await expect(page.locator('#format-picker')).toBeHidden();
+      const task = (await page.evaluate(() => window.downloader.snapshot())).tasks[index]!;
+      expect(task.options.selection).toEqual({ video: 'v2160', audio: 'flac' });
+      expect(task.options.mergeFormat).toBe(container);
+    }
+    await page.locator('#urls').fill('https://youtube.com/watch?v=muxed-only');
+    await page.locator('#download').click();
+    await expect(page.locator('#format-error')).toContainText('当前版本不提供合一流下载');
+    await expect(page.locator('#confirm-formats')).toBeDisabled();
+    await page.locator('#cancel-formats').click();
+  } finally { await desktop.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 test('desktop shell, input validation, settings and cookie guide', async ({}, testInfo) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ytbdl-ui-'));
@@ -49,6 +85,7 @@ test('desktop shell, input validation, settings and cookie guide', async ({}, te
     await expect(page.locator('#notice')).toContainText('仅支持');
     await page.locator('#cancel-formats').click();
     await page.locator('#settings > summary').click();
+    await expect(page.locator('#proxy-state')).toContainText('默认跟随系统代理');
     await page.locator('.guide > summary').click();
     await expect(page.locator('.guide')).toContainText('Cookie 相当于登录凭据');
     await page.locator('#concurrency').fill('2');
@@ -81,8 +118,9 @@ test('desktop shell, input validation, settings and cookie guide', async ({}, te
     await page.locator('#download-selected').click();
     await expect(page.locator('#format-title')).toHaveText('第二个视频');
     await expect(page.locator('#task-count')).toHaveText('1');
-    await page.locator('#stream-mode').selectOption('combined');
-    await page.locator('#combined-table input[value="muxed"]').check();
+    await page.locator('#video-table input[value="v2"]').check();
+    await page.locator('#audio-table input[value="a2"]').check();
+    await page.locator('#merge-format').selectOption('mov');
     await page.locator('#confirm-formats').click();
     await expect(page.locator('#task-count')).toHaveText('2');
     for (const width of [880, 1180]) {
@@ -95,6 +133,24 @@ test('desktop shell, input validation, settings and cookie guide', async ({}, te
       expect(await page.locator('.source-options').evaluate(node => getComputedStyle(node).gridTemplateColumns.split(' ').length)).toBe(2);
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     }
+  } finally { await desktop.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('system proxy is resolved by Electron and forwarded to format inspection and media downloads', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ytbdl-system-proxy-ui-'));
+  const desktop = await _electron.launch({ args: ['.'], env: { ...process.env, YTB_DL_TEST: '1', YTB_DL_TEST_DATA: root } });
+  try {
+    const page = await desktop.firstWindow();
+    await desktop.evaluate(async ({ session }) => {
+      await session.defaultSession.setProxy({ mode: 'fixed_servers', proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877' });
+    });
+    await page.locator('#urls').fill('https://youtube.com/watch?v=system-proxy-check');
+    await page.locator('#download').click();
+    await expect(page.locator('#format-content')).toBeVisible();
+    await page.locator('#video-table input[value="v1"]').check();
+    await page.locator('#audio-table input[value="a1"]').check();
+    await page.locator('#confirm-formats').click();
+    await expect(page.locator('.badge')).toHaveText('已完成');
   } finally { await desktop.close(); await rm(root, { recursive: true, force: true }); }
 });
 
@@ -153,6 +209,8 @@ test('batch videos require individual confirmation and support source audio, ret
     await page.locator('#urls').fill('https://youtube.com/watch?v=inspect-slow');
     await page.locator('#download').click();
     await expect(page.locator('#format-loading')).toBeVisible();
+    await expect(page.locator('#format-loading')).toContainText('正在连接平台');
+    await expect(page.locator('#format-loading')).toContainText('上限 120 秒');
     await page.locator('#cancel-formats').click();
     await expect(page.locator('#format-picker')).toBeHidden();
     await expect(page.locator('#download')).toBeEnabled();
@@ -214,17 +272,19 @@ test('resolution selection filters exact source dimensions without changing audi
     await page.locator('#stream-mode').selectOption('audio');
     await expect(page.locator('#resolution-control')).toBeHidden();
     await expect(page.locator('#confirm-formats')).toBeEnabled();
-    await page.locator('#stream-mode').selectOption('combined');
-    await expect(page.locator('#resolution')).toHaveValue('all');
-    expect(await resolutions.evaluateAll(options => options.map(o => (o as HTMLOptionElement).value))).toEqual(['all', '1280x720', '640x360']);
+    await page.locator('#stream-mode').selectOption('separate');
+    await expect(page.locator('#stream-mode option[value="combined"]')).toHaveCount(0);
+    await expect(page.locator('#merge-control')).toBeVisible();
     await page.locator('#resolution').selectOption('1280x720');
-    await expect(page.locator('#combined-table tbody tr')).toHaveCount(1);
-    await page.locator('#combined-table input[value="muxed720"]').check();
+    await expect(page.locator('#video-table tbody tr')).toHaveCount(1);
+    await page.locator('#video-table input[value="v720"]').check();
+    await page.locator('#merge-format').selectOption('mp4');
     await expect(page.locator('#format-summary')).toContainText('720p');
     await page.locator('#confirm-formats').click();
     await expect(page.locator('#task-count')).toHaveText('1');
     const task = (await page.evaluate(() => window.downloader.snapshot())).tasks[0]!;
-    expect(task.options.selection).toEqual({ combined: 'muxed720' });
+    expect(task.options.selection).toEqual({ video: 'v720', audio: 'a1' });
+    expect(task.options.mergeFormat).toBe('mp4');
     expect(task.options.height).toBe(0);
   } finally { await desktop.close(); await rm(root, { recursive: true, force: true }); }
 });

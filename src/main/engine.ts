@@ -7,6 +7,7 @@ import { run, type Running } from './process';
 import { options, videoUrl, errorMessage } from './validation';
 import type { Store } from './store';
 import type { Cookies } from './cookies';
+import type { ProxyResolver } from './proxy';
 
 export class Engine {
   playlist: Playlist | null = null;
@@ -17,7 +18,7 @@ export class Engine {
   private parseCancelled = false;
   private stopping = false;
   paused = false;
-  constructor(readonly store: Store, private tools: () => Tools, private cookies: Cookies, private proxy: () => string, private changed: () => void, private launch: typeof run = run) {}
+  constructor(readonly store: Store, private tools: () => Tools, private cookies: Cookies, private proxy: ProxyResolver, private changed: () => void, private launch: typeof run = run) {}
   get busy(): boolean { return this.running.size > 0 || !!this.parseWork || this.cookies.busy; }
   enqueue(urls: string[], input: DownloadOptions): { added: number; duplicates: number } {
     if (!Array.isArray(urls) || !urls.length) throw new Error('请输入至少一个视频链接。');
@@ -60,10 +61,11 @@ export class Engine {
       this.persist();
       await mkdir(t.directory, { recursive: true });
       cookie = await this.cookies.snapshot(t.options.cookie, t.id);
+      const proxy = await this.proxy(t.url);
       if (slot.cancelled || this.stopping) return;
       t.status = 'downloading';
       this.persist();
-      const proc = this.launch(this.tools().yt, downloadArgs(t, this.tools(), this.proxy(), cookie), line => {
+      const proc = this.launch(this.tools().yt, downloadArgs(t, this.tools(), proxy, cookie), line => {
         if (line.startsWith('STAGE:')) {
           t.status = 'processing';
           this.persist();
@@ -94,8 +96,10 @@ export class Engine {
       t.progress = 100;
     } catch (e) {
       if (!slot.cancelled && !this.stopping) {
+        const message = errorMessage(e);
+        const merging = t.options.selection?.video && t.options.selection.audio && (t.status === 'processing' || /postprocessing|merger|muxer/i.test(message));
         t.status = 'failed';
-        t.error = errorMessage(e) + (t.options.cookie !== 'none' ? ' 若提示登录或 Cookie 过期，请在 Chrome 重新登录，再同步/重新导出后重试。' : '');
+        t.error = message + (merging ? ` 合并为 ${(t.options.mergeFormat || 'mkv').toUpperCase()} 失败，不会自动转码或更换编码。若容器不兼容，请改选 MKV 后重新创建任务。` : '') + (t.options.cookie !== 'none' ? ' 若提示登录或 Cookie 过期，请在 Chrome 重新登录，再同步/重新导出后重试。' : '');
       }
     } finally {
       if (this.stopping) t.status = 'interrupted';
@@ -147,8 +151,9 @@ export class Engine {
     const list = this.playlist!;
     try {
       cookie = await this.cookies.snapshot(mode, list.id);
+      const proxy = await this.proxy(url);
       if (this.parseCancelled || this.stopping) return;
-      this.parser = this.launch(this.tools().yt, [...commonArgs(this.tools(), this.proxy(), cookie), '--flat-playlist', '--lazy-playlist', '--skip-download', '--dump-json', '--yes-playlist', '--', url], line => {
+      this.parser = this.launch(this.tools().yt, [...commonArgs(this.tools(), proxy, cookie), '--flat-playlist', '--lazy-playlist', '--skip-download', '--dump-json', '--yes-playlist', '--', url], line => {
         if (!line.startsWith('{')) return;
         const raw = JSON.parse(line) as Record<string, unknown>;
         const candidate = raw.webpage_url || raw.url || (raw.ie_key === 'Youtube' ? `https://www.youtube.com/watch?v=${raw.id}` : '');
